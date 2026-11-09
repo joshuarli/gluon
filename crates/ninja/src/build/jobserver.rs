@@ -152,9 +152,14 @@ pub fn detect_from_env() -> Result<Option<Client>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // Env mutation is process-global; serialize env-touching tests.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn parses_fifo_auth_from_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
         // Use a temp dir + mkfifo to round-trip through detect_from_env.
         let tmp = std::env::temp_dir().join(format!("ninja-js-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
@@ -194,6 +199,7 @@ mod tests {
 
     #[test]
     fn pipe_mode_is_rejected_with_friendly_warning() {
+        let _guard = ENV_LOCK.lock().unwrap();
         // SAFETY: single-threaded test mutating the env for one call.
         unsafe {
             std::env::set_var("MAKEFLAGS", "--jobserver-auth=3,4");
@@ -208,6 +214,7 @@ mod tests {
 
     #[test]
     fn no_makeflags_means_no_jobserver() {
+        let _guard = ENV_LOCK.lock().unwrap();
         // SAFETY: single-threaded.
         unsafe {
             std::env::remove_var("MAKEFLAGS");
