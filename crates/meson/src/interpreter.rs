@@ -101,3 +101,39 @@ impl Interpreter {
         eprintln!();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_src(source: &str) -> Result<(), String> {
+        let mut interp = Interpreter::new(".", ".");
+        interp.run(source)
+    }
+
+    #[test]
+    fn version_matches_the_meson_pin() {
+        let pins = include_str!("../../../tests/upstream/PINS");
+        let pinned = pins
+            .lines()
+            .find_map(|line| line.strip_prefix("MESON_VERSION="))
+            .expect("MESON_VERSION pin");
+        assert_eq!(crate::VERSION, pinned);
+    }
+
+    #[test]
+    fn project_rejects_a_newer_meson_requirement() {
+        let err = run_src("project('p', meson_version: '>=99')\n").unwrap_err();
+        assert!(err.contains("99"), "{err}");
+    }
+
+    #[test]
+    fn project_accepts_an_older_requirement_and_reports_one_version() {
+        run_src(&format!(
+            "project('p', meson_version: '>=1.0')\nassert(meson.version().version_compare('=={}'))\n",
+            crate::VERSION
+        ))
+        .unwrap();
+        run_src("project('p')\n").unwrap();
+    }
+}

@@ -1777,7 +1777,7 @@ fn env_unset(_vm: &mut VM, obj: &Object, args: &[CallArg]) -> Result<Object, Str
 // ---- Meson object methods ----
 
 fn meson_version(_vm: &mut VM, _obj: &Object, _args: &[CallArg]) -> Result<Object, String> {
-    Ok(Object::String("1.7.0".to_string()))
+    Ok(Object::String(crate::VERSION.to_string()))
 }
 
 fn meson_project_name(vm: &mut VM, _obj: &Object, _args: &[CallArg]) -> Result<Object, String> {

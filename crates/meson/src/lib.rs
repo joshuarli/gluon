@@ -42,6 +42,8 @@
     clippy::enum_variant_names
 )]
 
+pub const VERSION: &str = "1.12.1";
+
 pub mod ast;
 pub mod backend;
 pub mod builtins;

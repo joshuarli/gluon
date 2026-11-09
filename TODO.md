@@ -3,14 +3,6 @@
 Prefix: GLU
 Next: 14
 
-### GLU-3 · P2 · Meson reports 1.7.0 and does not enforce meson_version
-- **Area:** meson
-- **Where:** `bins/build/src/main.rs:6`, `crates/meson/src/cli.rs:628`, `crates/meson/src/builtins/methods.rs:1779`, `crates/meson/src/builtins/functions.rs:358`
-- **Problem:** `--version`, the banner, and `meson.version()` all return `1.7.0`. The parity pin is Meson 1.12.1. `project(meson_version:)` is stored and never compared, so a project that should be rejected is configured, and `version_compare` branches written for 1.12 see 1.7.0.
-- **Recommendation:** One version constant, compared against `project(meson_version:)` during setup, and returned by every version surface.
-- **Fix with:** single-source-of-truth
-- **Effort:** M
-
 ### GLU-7 · P2 · release zips omit the license texts
 - **Area:** release
 - **Where:** `.github/workflows/release.yml:151`

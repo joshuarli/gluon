@@ -625,7 +625,7 @@ impl Cli {
             }
             CliCommand::Format(args) => self.cmd_format(args),
             CliCommand::Version => {
-                println!("1.7.0");
+                println!("{}", crate::VERSION);
                 0
             }
             CliCommand::Help => {
@@ -674,7 +674,7 @@ impl Cli {
         let _ = std::fs::create_dir_all(&logs_dir);
 
         eprintln!("The Meson build system");
-        eprintln!("Version: 1.7.0 (oxidized-meson)");
+        eprintln!("Version: {} (oxidized-meson)", crate::VERSION);
         eprintln!("Source dir: {}", source_dir);
         eprintln!("Build dir: {}", build_dir);
         eprintln!("Build type: native build");

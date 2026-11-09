@@ -3,7 +3,7 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     if args.len() >= 2 && args[1] == "--version" {
-        println!("1.7.0");
+        println!("{}", meson::VERSION);
         return ExitCode::SUCCESS;
     }
     if args.len() >= 2 && args[1] == "ninja" {
@@ -16,7 +16,7 @@ fn main() -> ExitCode {
         return ExitCode::from(cli.run() as u8);
     }
     if args.len() == 1 {
-        println!("1.7.0");
+        println!("{}", meson::VERSION);
         return ExitCode::SUCCESS;
     }
     eprintln!("usage: gluon-build [meson|ninja] [args...] | --version");

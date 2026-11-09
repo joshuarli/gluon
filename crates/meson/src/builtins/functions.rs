@@ -358,6 +358,14 @@ fn builtin_project(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
     let meson_version = VM::get_arg_str(args, "meson_version", usize::MAX)
         .unwrap_or("")
         .to_string();
+    if !meson_version.is_empty()
+        && !crate::options::version_compare(crate::VERSION, &meson_version)
+    {
+        return Err(format!(
+            "Meson version is {} but project requires {}",
+            crate::VERSION, meson_version
+        ));
+    }
     // Handle license as either a single string or an array of strings
     let license = {
         let mut result = VM::get_arg_string_array(args, "license");
