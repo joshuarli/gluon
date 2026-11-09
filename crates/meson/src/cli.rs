@@ -3,9 +3,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use deser_json::{Indent, SerializerConfig};
+
 use crate::backend::{NinjaBackend, write_introspection};
 use crate::interpreter::Interpreter;
 use crate::options;
+
+const JSON_PRETTY: SerializerConfig =
+    SerializerConfig::builder().pretty(Indent::Spaces(2)).build();
 
 pub struct Cli {
     command: CliCommand,
@@ -788,14 +793,14 @@ impl Cli {
         }
 
         // Write build options for reconfigure
-        let cmd_line = serde_json::json!({
-            "source_dir": source_dir,
-            "build_dir": build_dir,
+        let cmd_line = deser_value::value!({
+            "source_dir": source_dir.clone(),
+            "build_dir": build_dir.clone(),
             "options": args.options.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>(),
         });
         let _ = std::fs::write(
             format!("{}/meson-private/cmd_line.txt", build_dir),
-            serde_json::to_string_pretty(&cmd_line).unwrap(),
+            JSON_PRETTY.to_string(&cmd_line).unwrap(),
         );
 
         eprintln!(
@@ -818,13 +823,13 @@ impl Cli {
         }
 
         let content = std::fs::read_to_string(&cmd_file).unwrap_or_default();
-        let saved: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
+        let saved: deser_value::Value = deser_json::from_str(&content).unwrap_or_default();
 
         let source_dir = saved["source_dir"].as_str().unwrap_or(".").to_string();
         let mut all_options = Vec::new();
 
         // Previous options
-        if let Some(opts) = saved["options"].as_array() {
+        if let Some(opts) = saved["options"].as_seq() {
             for opt in opts {
                 if let Some(s) = opt.as_str() {
                     if let Some(eq) = s.find('=') {
@@ -900,7 +905,7 @@ impl Cli {
         // Read test definitions from introspection
         let tests_file = format!("{}/meson-info/intro-tests.json", args.build_dir);
         let tests_json = std::fs::read_to_string(&tests_file).unwrap_or_else(|_| "[]".to_string());
-        let tests: Vec<serde_json::Value> = serde_json::from_str(&tests_json).unwrap_or_default();
+        let tests: Vec<deser_value::Value> = deser_json::from_str(&tests_json).unwrap_or_default();
 
         if tests.is_empty() {
             eprintln!("No tests defined.");

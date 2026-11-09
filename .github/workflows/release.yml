@@ -82,23 +82,23 @@ jobs:
           key: cargo-release-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
 
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        run: cargo build --profile dist --locked --target ${{ matrix.target }}
 
       - name: Test
-        run: cargo test --release --locked
+        run: cargo test --profile dist --locked
 
       - name: Smoke test binaries
         run: |
           for bin in meson ninja gluon-build; do
-            "target/${{ matrix.target }}/release/$bin" --version
+            "target/${{ matrix.target }}/dist/$bin" --version
           done
 
       - name: Package binaries
         run: |
           mkdir -p "dist/gluon-${{ matrix.target }}"
-          cp "target/${{ matrix.target }}/release/meson" "dist/gluon-${{ matrix.target }}/meson"
-          cp "target/${{ matrix.target }}/release/ninja" "dist/gluon-${{ matrix.target }}/ninja"
-          cp "target/${{ matrix.target }}/release/gluon-build" "dist/gluon-${{ matrix.target }}/gluon-build"
+          cp "target/${{ matrix.target }}/dist/meson" "dist/gluon-${{ matrix.target }}/meson"
+          cp "target/${{ matrix.target }}/dist/ninja" "dist/gluon-${{ matrix.target }}/ninja"
+          cp "target/${{ matrix.target }}/dist/gluon-build" "dist/gluon-${{ matrix.target }}/gluon-build"
           ls -la "dist/gluon-${{ matrix.target }}"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

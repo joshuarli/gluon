@@ -5,6 +5,11 @@ use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::Path;
 
+use deser_json::{Indent, SerializerConfig};
+
+const JSON_PRETTY: SerializerConfig =
+    SerializerConfig::builder().pretty(Indent::Spaces(2)).build();
+
 pub struct NinjaBackend {
     pub source_root: String,
     pub build_root: String,
@@ -1101,59 +1106,59 @@ pub fn write_introspection(
         .map_err(|e| format!("Cannot create introspection dir: {}", e))?;
 
     // intro-projectinfo.json
-    let project_info = serde_json::json!({
-        "descriptive_name": project.name,
-        "version": project.version,
-        "subproject_dir": project.subproject_dir,
+    let project_info = deser_value::value!({
+        "descriptive_name": project.name.clone(),
+        "version": project.version.clone(),
+        "subproject_dir": project.subproject_dir.clone(),
         "subprojects": [],
     });
     std::fs::write(
         format!("{}/intro-projectinfo.json", intro_dir),
-        serde_json::to_string_pretty(&project_info).unwrap(),
+        JSON_PRETTY.to_string(&project_info).unwrap(),
     )
     .map_err(|e| format!("Cannot write introspection: {}", e))?;
 
     // intro-targets.json
-    let targets: Vec<serde_json::Value> = build_data
+    let targets: Vec<deser_value::Value> = build_data
         .targets
         .iter()
         .map(|t| {
-            serde_json::json!({
-                "name": t.name,
-                "id": t.id,
+            deser_value::value!({
+                "name": t.name.clone(),
+                "id": t.id.clone(),
                 "type": format!("{:?}", t.target_type).to_lowercase(),
                 "defined_in": format!("{}/meson.build", t.subdir),
-                "filename": [t.output_name],
+                "filename": [t.output_name.clone()],
                 "build_by_default": t.build_by_default,
                 "installed": t.install,
-                "sources": t.sources,
+                "sources": t.sources.clone(),
             })
         })
         .collect();
     std::fs::write(
         format!("{}/intro-targets.json", intro_dir),
-        serde_json::to_string_pretty(&serde_json::Value::Array(targets)).unwrap(),
+        JSON_PRETTY.to_string(&deser_value::Value::from(targets)).unwrap(),
     )
     .map_err(|e| format!("Cannot write introspection: {}", e))?;
 
     // intro-tests.json
-    let tests: Vec<serde_json::Value> = build_data
+    let tests: Vec<deser_value::Value> = build_data
         .tests
         .iter()
         .map(|t| {
-            serde_json::json!({
-                "name": t.name,
+            deser_value::value!({
+                "name": t.name.clone(),
                 "timeout": t.timeout,
-                "suite": t.suite,
+                "suite": t.suite.clone(),
                 "is_parallel": t.is_parallel,
-                "protocol": t.protocol,
+                "protocol": t.protocol.clone(),
                 "priority": t.priority,
             })
         })
         .collect();
     std::fs::write(
         format!("{}/intro-tests.json", intro_dir),
-        serde_json::to_string_pretty(&serde_json::Value::Array(tests)).unwrap(),
+        JSON_PRETTY.to_string(&deser_value::Value::from(tests)).unwrap(),
     )
     .map_err(|e| format!("Cannot write introspection: {}", e))?;
 
@@ -1162,16 +1167,16 @@ pub fn write_introspection(
         .map_err(|e| format!("Cannot write introspection: {}", e))?;
 
     // intro-dependencies.json
-    let deps: Vec<serde_json::Value> = build_data
+    let deps: Vec<deser_value::Value> = build_data
         .dependencies
         .iter()
         .filter_map(|(name, obj)| {
             if let Object::Dependency(d) = obj {
-                Some(serde_json::json!({
-                    "name": name,
-                    "version": d.version,
-                    "compile_args": d.compile_args,
-                    "link_args": d.link_args,
+                Some(deser_value::value!({
+                    "name": name.clone(),
+                    "version": d.version.clone(),
+                    "compile_args": d.compile_args.clone(),
+                    "link_args": d.link_args.clone(),
                 }))
             } else {
                 None
@@ -1180,7 +1185,7 @@ pub fn write_introspection(
         .collect();
     std::fs::write(
         format!("{}/intro-dependencies.json", intro_dir),
-        serde_json::to_string_pretty(&serde_json::Value::Array(deps)).unwrap(),
+        JSON_PRETTY.to_string(&deser_value::Value::from(deps)).unwrap(),
     )
     .map_err(|e| format!("Cannot write introspection: {}", e))?;
 

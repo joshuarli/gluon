@@ -8,3 +8,8 @@ edition = "2024"
 [profile.release]
 strip = true
 lto = true
+
+[profile.dist]
+inherits = "release"
+codegen-units = 1
+strip = true

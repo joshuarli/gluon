@@ -29,4 +29,4 @@ jobs:
       - name: Install Rust toolchain
         run: rustup show
       - name: Test
-        run: cargo test --release --locked
+        run: cargo test --profile dist --locked
