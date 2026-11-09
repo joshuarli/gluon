@@ -494,27 +494,11 @@ fn schedule(
                 if !is_console_now && !edges[edge_idx].is_phony() && status.console_locked() {
                     continue;
                 }
-                // Jobserver gate. Only real (non-phony) edges consume a
-                // token; phonies finish synchronously and never spawn a
-                // subprocess. If no token is currently available we leave
-                // the edge marked unstarted and revisit it after a
-                // completion frees one.
-                let acquired_slot = if !edges[edge_idx].is_phony()
-                    && let Some(c) = jobserver_client.as_mut()
-                {
-                    match c.try_acquire() {
-                        Some(s) => Some(s),
-                        None => continue,
-                    }
-                } else {
-                    None
-                };
-                started[slot] = true;
-                held_slots[slot] = acquired_slot;
                 let edge = edges[edge_idx].clone();
                 if edge.is_phony() {
                     // Phony "completes" instantly; mark done inline so we
                     // can dispatch its dependents on this same loop turn.
+                    started[slot] = true;
                     done[slot] = true;
                     for s2 in 0..plan.len() {
                         if deps[s2].contains(&slot) && !done[s2] {
@@ -523,12 +507,9 @@ fn schedule(
                     }
                     continue;
                 }
-                // Re-check dirtiness right before dispatch: an upstream
-                // restat-clean completion may have just made this edge
-                // unnecessary. If clean, mark its outputs clean so
-                // downstream consumers also short-circuit.
                 let needs = edge_needs_run(&edge, &dirty);
                 if !needs {
+                    started[slot] = true;
                     for o in edge.outputs.iter().chain(&edge.implicit_outputs) {
                         dirty.insert(o.clone(), false);
                     }
@@ -540,6 +521,16 @@ fn schedule(
                     }
                     continue;
                 }
+                let acquired_slot = if let Some(c) = jobserver_client.as_mut() {
+                    match c.try_acquire() {
+                        Some(s) => Some(s),
+                        None => continue,
+                    }
+                } else {
+                    None
+                };
+                started[slot] = true;
+                held_slots[slot] = acquired_slot;
                 in_flight += 1;
                 any_real_work = true;
                 if let Some(name) = pool_name.as_deref() {
@@ -620,6 +611,17 @@ fn schedule(
         }
 
         if in_flight == 0 {
+            let unstarted = started.iter().any(|s| !*s);
+            if unstarted && held_slots.iter().any(|s| s.is_some()) {
+                if let Some(c) = jobserver_client.as_mut() {
+                    for held in &mut held_slots {
+                        if let Some(token) = held.take() {
+                            c.release(token);
+                        }
+                    }
+                }
+                continue;
+            }
             break;
         }
 

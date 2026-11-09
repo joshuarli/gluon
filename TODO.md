@@ -3,14 +3,6 @@
 Prefix: GLU
 Next: 14
 
-### GLU-2 · P1 · a clean edge keeps a jobserver token and later edges never run
-- **Area:** ninja scheduler
-- **Where:** `crates/ninja/src/build/runner.rs:505`, `crates/ninja/src/build/runner.rs:531`, `crates/ninja/src/build/runner.rs:622`
-- **Problem:** When `MAKEFLAGS` supplies a fifo jobserver and the user did not pass `-j`, a real edge takes a token before `edge_needs_run`. A clean edge is marked done and the loop continues without `release`. The token stays in `held_slots` until process exit, and `Client` has no `Drop` that writes it back. If the free tokens are exhausted, later edges `continue` without starting. The loop then sees `in_flight == 0` and returns success, so a dirty edge behind those clean edges is not built.
-- **Recommendation:** Decide the edge is clean before `try_acquire`. On the clean path, do not hold a token. Do not leave the scheduler while a planned edge is still unstarted and the only reason is a token this process is holding.
-- **Fix with:** none
-- **Effort:** M
-
 ### GLU-3 · P2 · Meson reports 1.7.0 and does not enforce meson_version
 - **Area:** meson
 - **Where:** `bins/build/src/main.rs:6`, `crates/meson/src/cli.rs:628`, `crates/meson/src/builtins/methods.rs:1779`, `crates/meson/src/builtins/functions.rs:358`

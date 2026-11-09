@@ -221,4 +221,108 @@ mod tests {
         }
         assert!(detect_from_env().unwrap().is_none());
     }
+
+    #[test]
+    fn clean_edge_does_not_hold_the_only_jobserver_token() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        let tmp = std::env::temp_dir().join(format!(
+            "ninja-js-clean-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let fifo = tmp.join("fifo");
+        let fifo_c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        // SAFETY: mkfifo on a path this test just created.
+        let rc = unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) };
+        assert_eq!(rc, 0);
+
+        struct Restore(std::path::PathBuf);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.0);
+                // SAFETY: this test is the only MAKEFLAGS writer while ENV_LOCK is held.
+                unsafe {
+                    std::env::remove_var("MAKEFLAGS");
+                }
+            }
+        }
+        let _restore = Restore(cwd);
+
+        std::env::set_current_dir(&tmp).unwrap();
+        // SAFETY: ENV_LOCK keeps this mutation off the other jobserver tests.
+        unsafe {
+            std::env::set_var(
+                "MAKEFLAGS",
+                format!("--jobserver-auth=fifo:{}", fifo.display()),
+            );
+        }
+
+        std::fs::write("clean.c", "c").unwrap();
+        std::fs::write("dirty.c", "d").unwrap();
+        std::fs::write("clean.o", "already built").unwrap();
+
+        let mut state = crate::graph::State::default();
+        state.rules.insert(
+            "touch".to_string(),
+            crate::graph::Rule {
+                name: "touch".to_string(),
+                bindings: std::collections::HashMap::from([(
+                    "command".to_string(),
+                    "touch $out".to_string(),
+                )]),
+            },
+        );
+        let clean = crate::graph::Edge {
+            rule: "touch".to_string(),
+            outputs: vec!["clean.o".to_string()],
+            implicit_outputs: vec![],
+            inputs: vec!["clean.c".to_string()],
+            implicit_inputs: vec![],
+            order_only_inputs: vec![],
+            bindings: std::collections::HashMap::new(),
+            dyndep: None,
+        };
+        let dirty = crate::graph::Edge {
+            rule: "touch".to_string(),
+            outputs: vec!["dirty.o".to_string()],
+            implicit_outputs: vec![],
+            inputs: vec!["dirty.c".to_string()],
+            implicit_inputs: vec![],
+            order_only_inputs: vec![],
+            bindings: std::collections::HashMap::new(),
+            dyndep: None,
+        };
+        state.edges = vec![clean, dirty];
+        state.producers.insert("clean.o".to_string(), 0);
+        state.producers.insert("dirty.o".to_string(), 1);
+
+        let cmd = super::super::expand::expand_in_edge(&state, &state.edges[0], "touch $out");
+        let ns = super::super::log::mtime_to_ns(
+            std::fs::metadata("clean.o").unwrap().modified().ok(),
+        );
+        let hash = super::super::log::hash_command(&cmd);
+        std::fs::write(
+            ".ninja_log",
+            format!("# ninja log v6\n0\t0\t{ns}\tclean.o\t{hash:x}\n"),
+        )
+        .unwrap();
+
+        let opts = crate::cli::Options {
+            targets: vec!["clean.o".to_string(), "dirty.o".to_string()],
+            quiet: true,
+            ..crate::cli::Options::default()
+        };
+        let code = super::super::runner::run(&state, &opts).unwrap();
+        assert_eq!(code, 0);
+        assert!(
+            std::path::Path::new("dirty.o").exists(),
+            "dirty edge did not run"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
 }
