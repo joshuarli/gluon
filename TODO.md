@@ -19,14 +19,6 @@ Next: 14
 - **Fix with:** single-source-of-truth
 - **Effort:** M
 
-### GLU-4 · P2 · a mismatched .ninja_log header is never replaced
-- **Area:** state
-- **Where:** `crates/state/src/log.rs:74`, `crates/state/src/log.rs:149`
-- **Problem:** `load` returns an empty log when the first line is not `# ninja log v6`, and it does not set `too_old` when the prefix is missing. `Writer` opens the file `O_APPEND` and, when the first line is not v6, writes a v6 header at the end. The next load still reads the old first line and discards the new entries. `recompact` exists only as `ninja -t recompact`.
-- **Recommendation:** When the header is wrong, rewrite the log from the entries just recorded instead of appending a second header.
-- **Fix with:** durable-state
-- **Effort:** M
-
 ### GLU-6 · P2 · meson test succeeds when the build or the runner fails
 - **Area:** meson
 - **Where:** `crates/meson/src/cli.rs:900`, `crates/meson/src/cli.rs:911`, `crates/meson/src/cli.rs:932`

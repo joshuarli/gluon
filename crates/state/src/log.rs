@@ -68,6 +68,7 @@ pub fn load(path: &str) -> BuildLog {
         return log;
     };
     let Some(rest) = header.strip_prefix("# ninja log v") else {
+        log.too_old = true;
         return log;
     };
     let version: u32 = rest.trim().parse().unwrap_or(0);
@@ -150,14 +151,21 @@ impl Writer {
         if self.file.is_some() {
             return Ok(());
         }
+        if self.header_present {
+            let f = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.path)?;
+            self.file = Some(f);
+            return Ok(());
+        }
         let mut f = OpenOptions::new()
             .create(true)
-            .append(true)
+            .write(true)
+            .truncate(true)
             .open(&self.path)?;
-        if !self.header_present {
-            writeln!(f, "# ninja log v{CURRENT_VERSION}")?;
-            self.header_present = true;
-        }
+        writeln!(f, "# ninja log v{CURRENT_VERSION}")?;
+        self.header_present = true;
         self.file = Some(f);
         Ok(())
     }
@@ -252,6 +260,51 @@ mod tests {
         let log = load(path_str);
         assert!(log.too_old);
         assert!(log.entries.is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn wrong_header_is_replaced_not_appended() {
+        let dir = std::env::temp_dir().join(format!(
+            "ninja-log-replace-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".ninja_log");
+        let path_str = path.to_str().unwrap();
+        std::fs::write(&path, "not a ninja log\nold entry\n").unwrap();
+
+        let loaded = load(path_str);
+        assert!(loaded.too_old);
+        assert!(loaded.entries.is_empty());
+
+        let mut w = Writer::new(path_str);
+        w.record(
+            &["out.o".to_string()],
+            &LogEntry {
+                start_ms: 1,
+                end_ms: 2,
+                mtime_ns: 3,
+                command_hash: hash_command("cc"),
+            },
+        );
+        drop(w);
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            text.lines().filter(|l| l.starts_with("# ninja log")).count(),
+            1
+        );
+        assert!(text.starts_with("# ninja log v6\n"));
+        let log = load(path_str);
+        assert!(!log.too_old);
+        assert_eq!(log.entries.len(), 1);
+        assert_eq!(log.entries["out.o"].command_hash, hash_command("cc"));
 
         std::fs::remove_dir_all(&dir).ok();
     }
