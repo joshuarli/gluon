@@ -185,6 +185,18 @@ impl Cli {
                 reconfigure = true;
             } else if arg == "--wipe" {
                 wipe = true;
+            } else if arg.starts_with("--") {
+                // --prefix=, --buildtype=, --default-library=, --libdir= etc: accept
+                // and ignore (install layout handled by caller staging, OD-4).
+                if !arg.contains('=') {
+                    // --flag value form: consume next arg if it looks like a value
+                    // (not another flag) to avoid treating it as positional dir.
+                    if let Some(next) = args.get(i + 1) {
+                        if !next.starts_with("-") {
+                            i += 1;
+                        }
+                    }
+                }
             } else {
                 positionals.push(arg.clone());
             }

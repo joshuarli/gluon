@@ -602,6 +602,14 @@ fn builtin_project(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
         }
     }
 
+    // Record language standards for the backend -std flags.
+    if let Some(Object::String(s)) = vm.options.get("c_std").cloned() {
+        vm.build_data.c_std = s;
+    }
+    if let Some(Object::String(s)) = vm.options.get("cpp_std").cloned() {
+        vm.build_data.cpp_std = s;
+    }
+
     Ok(Object::None)
 }
 
@@ -911,7 +919,30 @@ fn collect_sources(obj: &Object, sources: &mut Vec<String>) {
                 collect_sources(item, sources);
             }
         }
-        Object::File(f) => sources.push(f.path.clone()),
+        Object::File(f) => {
+            if f.is_built {
+                // built file (e.g. configure_file output): compile from build dir
+                let p = if f.subdir.is_empty() {
+                    f.path.clone()
+                } else {
+                    format!("{}/{}", f.subdir, f.path)
+                };
+                let lower = p.to_lowercase();
+                if lower.ends_with(".c")
+                    || lower.ends_with(".cc")
+                    || lower.ends_with(".cpp")
+                    || lower.ends_with(".cxx")
+                    || lower.ends_with(".m")
+                    || lower.ends_with(".mm")
+                {
+                    sources.push(format!("<genout:{}>", p));
+                } else {
+                    sources.push(format!("<orderonly:{}>", p));
+                }
+            } else {
+                sources.push(f.path.clone());
+            }
+        }
         Object::GeneratedList(data) => {
             for out in &data.outputs {
                 sources.push(format!("<genout:{}>", out));
@@ -920,8 +951,52 @@ fn collect_sources(obj: &Object, sources: &mut Vec<String>) {
                 sources.push(format!("<generated:{}>", obj.to_display_string()));
             }
         }
-        Object::CustomTarget(_) | Object::CustomTargetIndex(_, _) => {
-            sources.push(format!("<generated:{}>", obj.to_display_string()));
+        Object::CustomTarget(r) => {
+            let d = if r.subdir.is_empty() {
+                String::new()
+            } else {
+                format!("{}/", r.subdir)
+            };
+            for o in &r.outputs {
+                let lower = o.to_lowercase();
+                if lower.ends_with(".c")
+                    || lower.ends_with(".cc")
+                    || lower.ends_with(".cpp")
+                    || lower.ends_with(".cxx")
+                    || lower.ends_with(".m")
+                    || lower.ends_with(".mm")
+                {
+                    sources.push(format!("<genout:{}{}>", d, o));
+                } else {
+                    sources.push(format!("<orderonly:{}{}>", d, o));
+                }
+            }
+            if r.outputs.is_empty() {
+                sources.push(format!("<generated:{}>", obj.to_display_string()));
+            }
+        }
+        Object::CustomTargetIndex(r, idx) => {
+            let d = if r.subdir.is_empty() {
+                String::new()
+            } else {
+                format!("{}/", r.subdir)
+            };
+            if let Some(o) = r.outputs.get(*idx) {
+                let lower = o.to_lowercase();
+                if lower.ends_with(".c")
+                    || lower.ends_with(".cc")
+                    || lower.ends_with(".cpp")
+                    || lower.ends_with(".cxx")
+                    || lower.ends_with(".m")
+                    || lower.ends_with(".mm")
+                {
+                    sources.push(format!("<genout:{}{}>", d, o));
+                } else {
+                    sources.push(format!("<orderonly:{}{}>", d, o));
+                }
+            } else {
+                sources.push(format!("<generated:{}>", obj.to_display_string()));
+            }
         }
         _ => {}
     }
@@ -2017,7 +2092,24 @@ fn builtin_custom_target(vm: &mut VM, args: &[CallArg]) -> Result<Object, String
     match VM::get_arg_value(args, "command") {
         Some(Object::Array(arr)) => {
             for item in arr {
-                command.push(item.to_string_value());
+                match item {
+                    Object::String(s) => command.push(s.clone()),
+                    Object::ExternalProgram(p) => command.push(p.path.clone()),
+                    Object::File(f) => {
+                        if f.is_built {
+                            if f.subdir.is_empty() {
+                                command.push(format!("{}/{}", vm.build_root, f.path));
+                            } else {
+                                command.push(format!("{}/{}/{}", vm.build_root, f.subdir, f.path));
+                            }
+                        } else if f.subdir.is_empty() {
+                            command.push(format!("{}/{}", vm.source_root, f.path));
+                        } else {
+                            command.push(format!("{}/{}/{}", vm.source_root, f.subdir, f.path));
+                        }
+                    }
+                    other => command.push(other.to_string_value()),
+                }
             }
         }
         Some(Object::String(s)) => {
@@ -2068,6 +2160,24 @@ fn builtin_custom_target(vm: &mut VM, args: &[CallArg]) -> Result<Object, String
     let build_by_default = VM::get_arg_bool(args, "build_by_default", install);
     let build_always_stale = VM::get_arg_bool(args, "build_always_stale", false);
     let depfile = VM::get_arg_str(args, "depfile", usize::MAX).map(String::from);
+    let mut ct_depends: Vec<Object> = Vec::new();
+    if let Some(dep_val) = VM::get_arg_value(args, "depends") {
+        match dep_val {
+            Object::Array(arr) => ct_depends.extend(arr.iter().cloned()),
+            Object::CustomTarget(_) | Object::CustomTargetIndex(_, _) | Object::File(_) => {
+                ct_depends.push(dep_val.clone());
+            }
+            _ => {}
+        }
+    }
+    let ct_env: HashMap<String, String> = match VM::get_arg_value(args, "env") {
+        Some(Object::Environment(e)) => e.to_map(),
+        Some(Object::Dict(d)) => d
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_string_value()))
+            .collect(),
+        _ => HashMap::new(),
+    };
 
     let id = format!("custom_target:{}@{}", name, vm.current_subdir);
     let subdir = vm.current_subdir.clone();
@@ -2078,7 +2188,7 @@ fn builtin_custom_target(vm: &mut VM, args: &[CallArg]) -> Result<Object, String
         command,
         input,
         output: output.clone(),
-        depends: Vec::new(),
+        depends: ct_depends,
         depend_files: Vec::new(),
         depfile,
         capture,
@@ -2088,7 +2198,7 @@ fn builtin_custom_target(vm: &mut VM, args: &[CallArg]) -> Result<Object, String
         install_tag,
         build_by_default,
         build_always_stale,
-        env: HashMap::new(),
+        env: ct_env,
         subdir: subdir.clone(),
     };
 
@@ -2284,6 +2394,9 @@ fn builtin_configure_file(vm: &mut VM, args: &[CallArg]) -> Result<Object, Strin
         }
     } else if configuration.is_some() && command.is_empty() {
         // Configuration mode: read input, substitute @VAR@ patterns, write output
+        if output == "config.h" {
+            eprintln!("DEBUG configure_file config.h input={:?} cfg={:?}", input, configuration);
+        }
         if let Some(ref inp) = input {
             let input_path = if input_is_absolute || std::path::Path::new(inp).is_absolute() {
                 inp.clone()
@@ -2308,8 +2421,43 @@ fn builtin_configure_file(vm: &mut VM, args: &[CallArg]) -> Result<Object, Strin
             }
             let _ = std::fs::write(&output_path, &content);
         } else {
-            // No input file, just create empty output
-            let _ = std::fs::write(&output_path, "");
+            // No input: emit #define/#undef per configuration value (Meson c-format)
+            let mut lines: Vec<String> = Vec::new();
+            lines.push("/*".to_string());
+            lines.push(" * Autogenerated by the Meson build system.".to_string());
+            lines.push(" * Do not edit, your changes will be lost.".to_string());
+            lines.push(" */".to_string());
+            lines.push(String::new());
+            lines.push("#pragma once".to_string());
+            lines.push(String::new());
+            let mut entries: Vec<(String, Object)> = Vec::new();
+            match configuration {
+                Some(Object::ConfigurationData(ref cfg)) => {
+                    for (k, (v, _)) in cfg.values.borrow().iter() {
+                        entries.push((k.clone(), v.clone()));
+                    }
+                }
+                Some(Object::Dict(ref dict)) => {
+                    for (k, v) in dict {
+                        entries.push((k.clone(), v.clone()));
+                    }
+                }
+                _ => {}
+            }
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            for (k, v) in entries {
+                match v {
+                    Object::Bool(true) => lines.push(format!("#define {k}")),
+                    Object::Bool(false) => lines.push(format!("#undef {k}")),
+                    Object::Int(n) => lines.push(format!("#define {k} {n}")),
+                    Object::String(s) => lines.push(format!("#define {k} {s}")),
+                    _ => lines.push(format!("#define {k} {}", v.to_string_value())),
+                }
+            }
+            if lines.len() > 6 {
+                lines.push(String::new());
+            }
+            let _ = std::fs::write(&output_path, lines.join("\n"));
         }
     } else if !command.is_empty() {
         // Command mode: execute command with substitutions
@@ -3291,7 +3439,25 @@ fn builtin_run_command(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> 
             }
             Object::Array(arr) => {
                 for item in arr {
-                    cmd_parts.push(item.to_string_value());
+                    match item {
+                        Object::String(s) => cmd_parts.push(s.clone()),
+                        Object::ExternalProgram(p) => cmd_parts.push(p.path.clone()),
+                        Object::File(f) => {
+                            let path = if f.is_built {
+                                if f.subdir.is_empty() {
+                                    format!("{}/{}", vm.build_root, f.path)
+                                } else {
+                                    format!("{}/{}/{}", vm.build_root, f.subdir, f.path)
+                                }
+                            } else if f.subdir.is_empty() {
+                                format!("{}/{}", vm.source_root, f.path)
+                            } else {
+                                format!("{}/{}/{}", vm.source_root, f.subdir, f.path)
+                            };
+                            cmd_parts.push(path);
+                        }
+                        other => cmd_parts.push(other.to_string_value()),
+                    }
                 }
             }
             _ => cmd_parts.push(arg.to_string_value()),

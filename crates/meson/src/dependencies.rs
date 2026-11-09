@@ -69,6 +69,27 @@ pub fn find_dependency(vm: &mut VM, name: &str, args: &[CallArg]) -> Option<Obje
     let modules = VM::get_arg_string_array(args, "modules");
     let components = VM::get_arg_string_array(args, "components");
 
+    if name == "appleframeworks" {
+        let mut link_args = Vec::new();
+        for m in &modules {
+            link_args.push("-framework".to_string());
+            link_args.push(m.clone());
+        }
+        return Some(Object::Dependency(DependencyData {
+            name: name.to_string(),
+            found: true,
+            version: String::new(),
+            compile_args: Vec::new(),
+            link_args,
+            sources: Vec::new(),
+            include_dirs: Vec::new(),
+            dependencies: Vec::new(),
+            variables: HashMap::new(),
+            is_internal: false,
+            kind: String::new(),
+        }));
+    }
+
     // Check for internal/declared dependencies first
     if let Some(dep) = vm.build_data.dependencies.get(name) {
         return Some(dep.clone());

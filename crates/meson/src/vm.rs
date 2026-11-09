@@ -147,6 +147,8 @@ pub struct BuildData {
     /// meson.override_dependency() registry: name -> list of (static_flag, dep).
     /// A `None` static_flag matches both static and shared lookups.
     pub dependency_overrides: HashMap<String, Vec<(Option<bool>, Object)>>,
+    pub c_std: String,
+    pub cpp_std: String,
 }
 
 #[derive(Debug, Clone)]

@@ -202,19 +202,32 @@ impl NinjaBackend {
         // Determine language for compile rule
         let lang = self.detect_target_language(target);
         let compile_rule = format!("{}_COMPILER", lang);
+        let mut gen_order: Vec<String> = Vec::new();
+        for s in &target.sources {
+            if let Some(inner) = s.strip_prefix("<orderonly:").and_then(|v| v.strip_suffix('>')) {
+                gen_order.push(inner.to_string());
+            }
+        }
 
         // Compile each source file
         for source in &target.sources {
-            if source.starts_with("<generated:") {
+            if source.starts_with("<generated:") || source.starts_with("<orderonly:") {
                 continue;
+            }
+            // Headers are not compiled (Meson reference skips .h/.hpp/.hh).
+            {
+                let lower = source.to_lowercase();
+                if lower.ends_with(".h")
+                    || lower.ends_with(".hpp")
+                    || lower.ends_with(".hh")
+                    || lower.ends_with(".hxx")
+                {
+                    continue;
+                }
             }
             let genout = source.strip_prefix("<genout:").and_then(|s| s.strip_suffix('>'));
             let source_path = if let Some(gout) = genout {
-                if target.subdir.is_empty() {
-                    gout.to_string()
-                } else {
-                    format!("{}/{}", target.subdir, gout)
-                }
+                gout.to_string()
             } else if target.subdir.is_empty() {
                 format!("{}/{}", self.source_root, source)
             } else {
@@ -224,6 +237,8 @@ impl NinjaBackend {
             let obj_src = genout.as_deref().unwrap_or(source);
             let obj_name = obj_src.replace('/', "_").replace('.', "_");
             let obj_path = format!("{}{}_{}.o", target_dir, target.name, obj_name);
+            let file_lang = self.detect_file_language(obj_src, &lang);
+            let file_compile_rule = format!("{}_COMPILER", file_lang);
 
             // Collect compile args
             let mut args = Vec::new();
@@ -233,13 +248,23 @@ impl NinjaBackend {
                     args.push(format!("-I{}/{}", self.source_root, target.subdir));
                 }
                 args.push(format!("-I{}", self.build_root));
+                if !target.subdir.is_empty() {
+                    args.push(format!("-I{}/{}", self.build_root, target.subdir));
+                }
             }
             for inc in &target.include_dirs {
                 args.push(format!("-I{}/{}", self.source_root, inc));
+                args.push(format!("-I{}/{}", self.build_root, inc));
             }
 
-            // Language-specific args
-            match lang.as_str() {
+            // Language-specific args (per-file)
+            if file_lang == "c" && !build_data.c_std.is_empty() && build_data.c_std != "none" {
+                args.push(format!("-std={}", build_data.c_std));
+            }
+            if file_lang == "cpp" && !build_data.cpp_std.is_empty() && build_data.cpp_std != "none" {
+                args.push(format!("-std={}", build_data.cpp_std));
+            }
+            match file_lang.as_str() {
                 "c" => args.extend(target.c_args.iter().cloned()),
                 "cpp" => args.extend(target.cpp_args.iter().cloned()),
                 "rust" => args.extend(target.rust_args.iter().cloned()),
@@ -258,7 +283,11 @@ impl NinjaBackend {
 
             let depfile = format!("{}.d", obj_path);
 
-            writeln!(out, "build {}: {} {}", obj_path, compile_rule, source_path).unwrap();
+            write!(out, "build {}: {} {}", obj_path, file_compile_rule, source_path).unwrap();
+            if !gen_order.is_empty() {
+                write!(out, " || {}", gen_order.join(" ")).unwrap();
+            }
+            writeln!(out).unwrap();
             writeln!(out, "  DEPFILE = {}", depfile).unwrap();
             if !args.is_empty() {
                 writeln!(out, "  ARGS = {}", args.join(" ")).unwrap();
@@ -349,7 +378,11 @@ impl NinjaBackend {
                 let mut link_args = vec!["-shared".to_string()];
 
                 if target.target_type == TargetType::SharedLibrary {
-                    link_args.push(format!("-Wl,-soname,{}", target.output_name));
+                    if cfg!(target_os = "macos") {
+                        link_args.push(format!("-Wl,-install_name,{}", target.output_name));
+                    } else {
+                        link_args.push(format!("-Wl,-soname,{}", target.output_name));
+                    }
                 }
 
                 for dep in &target.dependencies {
@@ -505,13 +538,11 @@ impl NinjaBackend {
                             format!("{}/", f.subdir)
                         };
                         order_only.push(format!("{}{}", d, f.path));
+                    } else if f.subdir.is_empty() {
+                        order_only.push(format!("{}/{}", self.source_root, f.path));
                     } else {
-                        let d = if f.subdir.is_empty() {
-                            String::new()
-                        } else {
-                            format!("{}/", f.subdir)
-                        };
-                        order_only.push(format!("{}{}", d, f.path));
+                        order_only
+                            .push(format!("{}/{}/{}", self.source_root, f.subdir, f.path));
                     }
                 }
                 _ => {}
@@ -530,7 +561,15 @@ impl NinjaBackend {
             write!(out, " | {}", order_only.join(" ")).unwrap();
         }
         writeln!(out).unwrap();
-        writeln!(out, "  COMMAND = {}", shell_escape_command(&command_parts)).unwrap();
+        let mut cmd_with_env: Vec<String> = Vec::new();
+        let mut env_keys: Vec<&String> = ct.env.keys().collect();
+        env_keys.sort();
+        for k in env_keys {
+            let v = &ct.env[k];
+            cmd_with_env.push(format!("{}={}", k, v));
+        }
+        cmd_with_env.extend(command_parts.iter().cloned());
+        writeln!(out, "  COMMAND = {}", shell_escape_command(&cmd_with_env)).unwrap();
         writeln!(out, "  DESC = Generating {}", ct.name).unwrap();
         if let Some(ref depfile) = ct.depfile {
             writeln!(out, "  DEPFILE = {}{}", target_dir, depfile).unwrap();
@@ -549,6 +588,12 @@ impl NinjaBackend {
         } else {
             format!("{}/", cf.subdir)
         };
+        // Generation at configure time: when command is empty (configuration or
+        // copy mode), the output already exists in the build dir from setup;
+        // emitting a cp edge would clobber substituted values with the template.
+        if cf.command.is_empty() {
+            return Ok(());
+        }
         let output_path = format!("{}{}", target_dir, cf.output);
 
         // Configuration file generation is done at configure time, not build time.
@@ -666,6 +711,36 @@ impl NinjaBackend {
         }
 
         Ok(())
+    }
+
+    fn detect_file_language(&self, source: &str, fallback: &str) -> String {
+        let lower = source.to_lowercase();
+        if lower.ends_with(".cc")
+            || lower.ends_with(".cpp")
+            || lower.ends_with(".cxx")
+            || lower.ends_with(".c++")
+        {
+            "cpp".to_string()
+        } else if lower.ends_with(".m") || lower.ends_with(".mm") {
+            if lower.ends_with(".mm") { "cpp".to_string() } else { "c".to_string() }
+        } else if lower.ends_with(".rs") {
+            "rust".to_string()
+        } else if lower.ends_with(".f") || lower.ends_with(".f90") || lower.ends_with(".f95") {
+            "fortran".to_string()
+        } else if lower.ends_with(".d") && !lower.ends_with(".h") {
+            "d".to_string()
+        } else if lower.ends_with(".vala") {
+            "vala".to_string()
+        } else if lower.ends_with(".c") {
+            "c".to_string()
+        } else if lower.ends_with(".h")
+            || lower.ends_with(".hpp")
+            || lower.ends_with(".hh")
+        {
+            fallback.to_string()
+        } else {
+            fallback.to_string()
+        }
     }
 
     fn detect_target_language(&self, target: &BuildTarget) -> String {
