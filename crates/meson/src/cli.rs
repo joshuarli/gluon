@@ -115,7 +115,10 @@ struct FormatArgs {
 
 impl Cli {
     pub fn parse_args() -> Self {
-        let args: Vec<String> = std::env::args().collect();
+        Self::parse_args_from(std::env::args().collect())
+    }
+
+    pub fn parse_args_from(args: Vec<String>) -> Self {
 
         if args.len() < 2 {
             return Cli {

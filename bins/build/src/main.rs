@@ -10,12 +10,10 @@ fn main() -> ExitCode {
         return ninja::main_entry();
     }
     if args.len() >= 2 && args[1] == "meson" {
-        if args.iter().any(|a| a == "--version") {
-            println!("1.7.0");
-            return ExitCode::SUCCESS;
-        }
-        eprintln!("build: meson subcommand forwards to `meson` bin (see bins/meson)");
-        return ExitCode::SUCCESS;
+        let mut synthetic = vec!["meson".to_string()];
+        synthetic.extend(args[2..].iter().cloned());
+        let cli = meson::Cli::parse_args_from(synthetic);
+        return ExitCode::from(cli.run() as u8);
     }
     if args.len() == 1 {
         println!("1.7.0");

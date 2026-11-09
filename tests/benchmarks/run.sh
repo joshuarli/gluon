@@ -29,7 +29,15 @@ export TMPDIR="$ROOT/.work/tmp"
 mkdir -p "$TMPBASE"
 
 timed() {
-  python3 -c "import subprocess,sys,time,resource; t=time.perf_counter(); subprocess.run(sys.argv[1:], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); r=resource.getrusage(resource.RUSAGE_CHILDREN); print(f'wall={time.perf_counter()-t:.3f} cpu_user={r.ru_utime:.3f} cpu_sys={r.ru_stime:.3f} peak_rss_kb={r.ru_maxrss}')" "$@"
+  if [ -x /usr/bin/time ]; then
+    out=$(/usr/bin/time -l "$@" 2>&1)
+    rc=$?
+    wall=$(printf '%s' "$out" | awk '/real/ {print $1; exit}')
+    rss=$(printf '%s' "$out" | awk '/maximum resident/ {print $1; exit}')
+    echo "wall=$wall rss=$rss rc=$rc"
+    return $rc
+  fi
+  python3 -c "import subprocess,sys,time,resource; t=time.perf_counter(); r=subprocess.run(sys.argv[1:]); ru=resource.getrusage(resource.RUSAGE_CHILDREN); print(f'wall={time.perf_counter()-t:.3f} rss_kb={ru.ru_maxrss} rc={r.returncode}')" "$@"
 }
 
 gen_graph() {

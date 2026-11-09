@@ -6,4 +6,5 @@ license = "Apache-2.0"
 
 [dependencies]
 graph = { path = "../graph" }
+state = { path = "../state" }
 libc = "0.2.185"

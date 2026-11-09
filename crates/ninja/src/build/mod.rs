@@ -1,15 +1,12 @@
-//! Build orchestration. Splits responsibilities across:
-//!   - `plan`: target resolution and dependency-order scheduling
-//!   - `runner`: per-edge subprocess spawning, with optional parallelism
-//!   - `expand`: edge-context variable expansion for `command`, `$in`,
-//!     `$out`, etc.
+//! Build orchestration. Log/deps state lives in the `state` crate (S7);
+//! re-exported here so existing `super::log` etc. paths keep working.
 
-mod depfile;
-mod deps_log;
+pub use state::depfile;
+pub use state::deps_log;
+pub use state::log;
 mod dyndep;
 mod expand;
 mod jobserver;
-pub mod log;
 mod plan;
 mod runner;
 
