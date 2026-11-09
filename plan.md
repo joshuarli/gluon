@@ -11,9 +11,9 @@ Meson/Ninja dependency subset.
 - Goal: land `meson` + `ninja` + `build` in this repo; correctness parity
   against pinned Meson/Ninja baselines, qualification on `~/d/play`, then
   measured optimization.
-- Last accepted revision: `0b51e40 docs(plan): make campaign executable unattended on this host`.
-- Accepted: G0 (ground). Red: none. Parked: none.
-- Next slice: **S1 (import)** — vendor oxidized sources into workspace layout.
+- Last accepted revision: `7fa34d2 docs(plan): record G0 ground pins`.
+- Accepted: G0 (ground), S1 (import). Red: none. Parked: none.
+- Next slice: **S2 (harness + probe)** — differential harness and libplacebo probe.
 - Resume prompt: `run the next slice per plan.md; first command: git log --oneline -3 && git status --short`.
 
 ## Charter
@@ -144,7 +144,10 @@ Meson/Ninja dependency subset.
   meson 7 cargo tests, ninja 19 cargo tests; Nix-only 284/284 and 18/18
   claims not reproduced (no Nix here) — S2 recreates the harness.
 - Loop timings at preflight (release, single-crate, warm cache):
-  oxidized-meson ~23 s, oxidized-ninja ~8 s. Workspace numbers come from S1.
+  oxidized-meson ~23 s, oxidized-ninja ~8 s.
+- Workspace loop timings at S1 (macOS arm64, warm registry):
+  `cargo build --release` (cold target) ~1.8 s, `cargo test --workspace` ~9 s,
+  `cargo test -p meson` ~0.8 s, `cargo test -p ninja` ~0.3 s (warm).
 - Known divergences the campaign expects (not regressions): oxidized-meson
   CLI argument order (P-5); hard-coded `cc`/`c++` and space-joined quoting
   in `crates/meson/src/backend.rs` (S4); full graph cloning plus repeated
