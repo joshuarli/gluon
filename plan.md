@@ -4,16 +4,16 @@ Unified Rust Meson + Ninja build system: one workspace, one shared execution
 engine, two independently compatible frontends (`meson`, `ninja`), plus an
 integrated `build` binary. Parity with pinned references first; optimization
 only after qualification passes. Final proof includes building `~/d/play`'s
-Meson/Ninja dependency subset.
+CMake-less Meson dependency closure.
 
 ## Status
 
 - Goal: land `meson` + `ninja` + `build` in this repo; correctness parity
   against pinned Meson/Ninja baselines, qualification on `~/d/play`, then
   measured optimization.
-- Last accepted revision: `7fa34d2 docs(plan): record G0 ground pins`.
-- Accepted: G0 (ground), S1 (import). Red: none. Parked: none.
-- Next slice: **S2 (harness + probe)** — differential harness and libplacebo probe.
+- Last accepted revision: `7d3ffc1 docs(plan): record S1 workspace timings`.
+- Accepted: G0 (ground), S1 (import), S2 (harness + probe). Red: none. Parked: none.
+- Next slice: **S3 (refresh)** — Meson 1.12 / Ninja 1.13 deltas and upstream CLI arg order.
 - Resume prompt: `run the next slice per plan.md; first command: git log --oneline -3 && git status --short`.
 
 ## Charter
@@ -78,6 +78,13 @@ Meson/Ninja dependency subset.
   Meson, plus the executor backend). CMake-built deps (Vulkan-Headers,
   Vulkan-Loader, shaderc, SPIRV-Cross) stay on CMake; no CMake frontend in
   this campaign. Reverses only when play's build-deps no longer invokes CMake.
+  **Reversed 2026-11-09:** play is CMake-less (`scripts/build-deps.sh` has no
+  `cmake` invocation; Vulkan-Headers/Loader and shaderc via bottles,
+  SPIRV-Cross and libplacebo via Meson). Gate expands to the full Meson
+  closure (libplacebo 7.387.0 + Metal + SPIRV-Cross vulkan-sdk 1.4.363.0);
+  still no CMake frontend. S6 integrates by driving both Meson builds with
+  gluon `meson`+`ninja` and linking play's player crates with
+  `CARGO_TARGET_DIR` under `.work/tmp`.
 - **OD-5 Pushing.** Verified commits on `main` are pushed to
   `origin` (`git@github.com:joshuarli/gluon`) as they land.
 - **OD-6 Musl via Docker.** The static-musl artifact is built in a pinned
@@ -167,7 +174,7 @@ All slices serial except the named pair. Each owns only its listed files.
 | **S3 refresh** | Meson 1.12 / Ninja 1.13 deltas (`generator.process(depends:)`, build/subproject and cross semantics); upstream CLI arg order (P-5) | `crates/meson/**`, `crates/ninja/**`, `tests/differential/expected-fail` (removals only) | S2 | `run.sh` green; refresh fixtures removed from ledger; `meson setup <builddir> <srcdir>` accepted |
 | **S4 harden frontend** | Compiler discovery, argv quoting (no string-joining), path semantics, cross-compilation, and the libplacebo frontend gaps from the ledger | `crates/meson/**`, ledger removals for meson fixtures | S3 | `cargo test -p meson` green; `run.sh` green; every meson-side libplacebo ledger entry removed |
 | **S5 harden executor** | Dirtiness, restat, dyndep, rspfile, subninja scopes, signals, jobserver, pools, missing-dep and interrupted-build correctness | `crates/ninja/**`, ledger removals for ninja fixtures | S3 | `cargo test -p ninja` green; `run.sh` green; executor ledger entries removed |
-| **S6 qualify** | `~/d/play` Meson/Ninja subset (OD-4) on macOS arm64; static-musl artifact in Docker (OD-6) | `tests/upstream/**`, `.work/tmp/play-fixture/**` | S4, S5 | `tests/upstream/musl.sh` (pinned `rust:<cargo 1.98 tag>` image, `--platform linux/amd64`, `x86_64-unknown-linux-musl`) produces static bins that run `--version` in the container; gluon `meson`+`ninja` build libplacebo 7.387.0 with the Metal patch in `.work/tmp/play-fixture`, and play's player crates link against it with `CARGO_TARGET_DIR` under `.work/tmp`; ledger empty |
+| **S6 qualify** | `~/d/play` CMake-less closure (OD-4 reversed 2026-11-09) on macOS arm64; static-musl artifact in Docker (OD-6) | `tests/upstream/**`, `.work/tmp/play-fixture/**` | S4, S5 | `tests/upstream/musl.sh` (pinned `rust:<cargo 1.98 tag>` image, `--platform linux/amd64`, `x86_64-unknown-linux-musl`) produces static bins that run `--version` in the container; gluon `meson`+`ninja` build libplacebo 7.387.0 with the Metal patch and SPIRV-Cross vulkan-sdk 1.4.363.0 in `.work/tmp/play-fixture` per play's `scripts/build-deps.sh` Meson invocations, and play's player crates link against them with `CARGO_TARGET_DIR` under `.work/tmp`; ledger empty |
 | **S7 unify** | Shared typed graph + engine + state crates; both frontends lower into them; direct Meson-to-engine lowering; `bins/build` integrated binary; keep `build.ninja` generation | `crates/graph/**`, `crates/engine/**`, `crates/state/**`, `crates/meson/**`, `crates/ninja/**`, `bins/build/**`, `Cargo.toml` | S6 | Equivalence test: direct-DAG and `build.ninja`-reparsed builds produce identical outputs and rebuild behavior on the corpus and libplacebo; `run.sh` green |
 | **S8 optimize** | String interning, arena allocation, queue-driven scheduling, efficient metadata scans, persistent snapshot with conservative invalidation; P-2 argv evaluation | `crates/graph/**`, `crates/engine/**`, `crates/state/**`, `crates/ninja/**`, `tests/benchmarks/**` | S7 | `tests/benchmarks/run.sh` reports the corpus with CPU/wall/peak RSS; correctness gates green |
 | **Close** | Delete dead code; independent adversarial review (`review` skill, or `god` via the bridge); fix P1/P2; final report in this file | all owned files | S8 | Full suite green; perf budget met (Acceptance); report names accepted slices, parked items, and measured deltas |
@@ -196,9 +203,10 @@ conditions. No deliverable waits on the owner.
   subproject/build semantics, and cross fixtures pass; upstream arg order
   accepted. Failure = fixture mismatch or arg-order rejection.
 - **Qualification** (S6): success = musl artifact builds and runs in the
-  container; libplacebo + player crates build with gluon frontends on macOS
-  arm64, matching the `meson`/`ninja` baseline from play's
-  `scripts/build-deps.sh` per P-6. Failure = any divergence.
+  container; libplacebo + SPIRV-Cross + player crates build with gluon
+  frontends on macOS arm64, matching the `meson`/`ninja` baseline from play's
+  `scripts/build-deps.sh` per P-6 (play is CMake-less per OD-4 reversal).
+  Failure = any divergence.
 - **Unification equivalence** (S7): success = direct-DAG and
   reparsed-`build.ninja` builds are output- and behavior-identical on the
   corpus. Failure = any divergence; the slice does not land.
@@ -253,8 +261,9 @@ only); a CMake frontend; network features; Windows as a design driver.
 - `~/d/play` (proof target): Meson/Ninja used for libplacebo 7.387.0
   (`scripts/build-deps.sh`: muon preferred, but meson used for libplacebo
   because muon 0.7.0 mishandles macOS shared-library install naming;
-  samu/ninja backend; Metal patch from libplacebo MR 858); CMake used for
-  Vulkan-Headers/Loader, shaderc, SPIRV-Cross — out of scope per OD-4.
+  samu/ninja backend; Metal patch from libplacebo MR 858); Vulkan-Headers/
+  Loader and shaderc via bottles, SPIRV-Cross via Meson (CMake-less per
+  OD-4 reversal 2026-11-09).
 - Prior-art verdicts (kept, verified only where noted): n2 (architecture),
   Android fork (parser optimization), Orphis/ninja-rs (correctness
   reference).
