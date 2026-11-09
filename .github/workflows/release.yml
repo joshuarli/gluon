@@ -147,6 +147,7 @@ jobs:
           mkdir -p dist/zips
           for dir in dist/gluon-*; do
             name=$(basename "$dir")
+            chmod +x "$dir/meson" "$dir/ninja" "$dir/gluon-build"
             zip -9 --junk-paths "dist/zips/$name.zip" "$dir/meson" "$dir/ninja" "$dir/gluon-build"
           done
           cd dist/zips
