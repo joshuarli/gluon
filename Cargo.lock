@@ -53,6 +53,7 @@ dependencies = [
  "graph",
  "meson",
  "ninja",
+ "rustybench",
  "state",
 ]
 
@@ -103,6 +104,9 @@ dependencies = [
 [[package]]
 name = "graph"
 version = "0.1.0"
+dependencies = [
+ "rustybench",
+]
 
 [[package]]
 name = "hashbrown"
@@ -127,6 +131,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
 
 [[package]]
+name = "lexopt"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "803ec87c9cfb29b9d2633f20cba1f488db3fd53f2158b1024cbefb47ba05d413"
+
+[[package]]
 name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -145,10 +155,33 @@ dependencies = [
  "glob",
  "graph",
  "regex-lite",
+ "rustybench",
  "serde",
  "serde_json",
  "sha2",
  "toml",
+]
+
+[[package]]
+name = "mini-internal"
+version = "0.1.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34dea53b00d87f21b1535cbef93765c75f159dbbfeef16152f0b6b3bf28f3bb6"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "miniserde"
+version = "0.1.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8f82621301d3b99a1542736de96e5df69865b235987d6470b28c7aa670cfeb1"
+dependencies = [
+ "itoa",
+ "mini-internal",
+ "zmij",
 ]
 
 [[package]]
@@ -157,6 +190,7 @@ version = "0.1.0"
 dependencies = [
  "graph",
  "libc",
+ "rustybench",
  "state",
 ]
 
@@ -183,6 +217,24 @@ name = "regex-lite"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cab834c73d247e67f4fae452806d17d3c7501756d98c8808d7c9c7aa7d18f973"
+
+[[package]]
+name = "rustybench"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b30d630ac8c78e1d96607fcbb39803f30c641602723f4fea9ee5e7fb99f000d"
+dependencies = [
+ "lexopt",
+ "miniserde",
+ "regex-lite",
+ "rustybench-macros",
+]
+
+[[package]]
+name = "rustybench-macros"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "909f333eabde4ac2811394ae88d2cf3f4273bc7a7dceb4508a229e7d0860e843"
 
 [[package]]
 name = "serde"
@@ -250,6 +302,9 @@ dependencies = [
 [[package]]
 name = "state"
 version = "0.1.0"
+dependencies = [
+ "rustybench",
+]
 
 [[package]]
 name = "syn"

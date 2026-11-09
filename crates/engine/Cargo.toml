@@ -11,3 +11,8 @@ state = { path = "../state" }
 
 [dev-dependencies]
 meson = { path = "../meson" }
+rustybench = { version = "0.1" }
+
+[[bench]]
+name = "engine"
+harness = false

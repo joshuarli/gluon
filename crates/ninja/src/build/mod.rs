@@ -7,7 +7,7 @@ pub use state::log;
 mod dyndep;
 mod expand;
 mod jobserver;
-mod plan;
+pub mod plan;
 mod runner;
 
 pub use expand::expand_in_edge as expand_in_edge_pub;
