@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = ["crates/meson", "crates/ninja", "bins/meson", "bins/ninja"]
+
+[workspace.package]
+edition = "2024"
+
+[profile.release]
+strip = true
+lto = true
