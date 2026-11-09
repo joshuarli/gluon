@@ -10,7 +10,13 @@ pub mod tools;
 use std::process::ExitCode;
 
 pub fn main_entry() -> ExitCode {
-    let raw: Vec<String> = std::env::args().collect();
+    main_from(std::env::args().collect())
+}
+
+/// Run ninja with `argv`. `argv[0]` is the program name and is ignored.
+/// Later words are flags and targets, so a wrapper that puts a subcommand
+/// in `argv[1]` must drop that word before calling this.
+pub fn main_from(raw: Vec<String>) -> ExitCode {
     let opts = match cli::parse(&raw) {
         Ok(o) => o,
         Err(e) => {

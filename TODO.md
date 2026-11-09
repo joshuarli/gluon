@@ -3,14 +3,6 @@
 Prefix: GLU
 Next: 14
 
-### GLU-1 · P1 · gluon-build ninja treats the subcommand as a target
-- **Area:** bins/build
-- **Where:** `bins/build/src/main.rs:9`, `crates/ninja/src/lib.rs:13`
-- **Problem:** `gluon-build ninja` calls `ninja::main_entry`, which reads `std::env::args()` from the start. The word `ninja` is then a build target. `gluon-build ninja -C <dir>` fails with `unknown target 'ninja'`. `gluon-build meson` builds a fresh argument list and does not have this bug. `--version` returns before targets are used, so it does not show the bug.
-- **Recommendation:** Pass the arguments after the subcommand into ninja, the way the meson branch builds `synthetic`.
-- **Fix with:** none
-- **Effort:** S
-
 ### GLU-2 · P1 · a clean edge keeps a jobserver token and later edges never run
 - **Area:** ninja scheduler
 - **Where:** `crates/ninja/src/build/runner.rs:505`, `crates/ninja/src/build/runner.rs:531`, `crates/ninja/src/build/runner.rs:622`
