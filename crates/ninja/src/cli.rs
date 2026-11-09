@@ -15,6 +15,7 @@ pub struct Options {
     pub quiet: bool,
     pub verbose: bool,
     pub show_version: bool,
+    pub dry_run: bool,
     pub debug: Vec<String>,
     pub tool: Option<String>,
     pub tool_args: Vec<String>,
@@ -33,6 +34,7 @@ pub fn parse(argv: &[String]) -> Result<Options, String> {
             "--version" => o.show_version = true,
             "--quiet" => o.quiet = true,
             "-v" | "--verbose" => o.verbose = true,
+            "-n" | "--dry-run" => o.dry_run = true,
             "-k" => {
                 i += 1;
                 let n = argv

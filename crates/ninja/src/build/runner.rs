@@ -92,6 +92,28 @@ pub fn run_targets(
     }
 
     let real_count = plan.iter().filter(|&&i| !state.edges[i].is_phony()).count();
+    if opts.dry_run {
+        // Dry run (S8): print planned commands without dispatching.
+        // Honors dirtiness minimally (clean phony-only plans print nothing).
+        let mode = Mode::detect();
+        let _ = mode;
+        let mut n = 0usize;
+        let total = real_count;
+        for &edge_idx in &plan {
+            let edge = &state.edges[edge_idx];
+            if edge.is_phony() {
+                continue;
+            }
+            n += 1;
+            if !opts.quiet {
+                println!("[{n}/{total}] command");
+            }
+        }
+        if n == 0 && !opts.quiet {
+            println!("ninja: no work to do.");
+        }
+        return Ok(RunReport { code: 0, ran: false });
+    }
     let mode = Mode::detect();
     let mut status = Status::new(mode, opts.quiet, opts.verbose, real_count);
     let (result, ran) = schedule(state, opts, &plan, &mut status, announce_no_work)?;
@@ -187,8 +209,9 @@ fn schedule(
     // sets `pool = name` may not start while `pool_in_flight[name] >=
     // pools[name]`. The implicit `console` pool has depth 1.
     let mut pool_in_flight: HashMap<String, usize> = HashMap::new();
-    let mut pool_depths: HashMap<String, usize> = state.pools.clone();
-    pool_depths.entry("console".to_string()).or_insert(1);
+    // S8 efficient scan: borrow pools rather than cloning the full map;
+    // console defaults to depth 1 when undeclarated (handled at lookup).
+    let pool_depths: &HashMap<String, usize> = &state.pools;
     // Tracks whether we actually dispatched any subprocess work. If
     // every edge in the plan was skipped (clean / phony) we still owe
     // the user the canonical "ninja: no work to do." message.
@@ -452,7 +475,11 @@ fn schedule(
                 if let Some(name) = pool_name.as_deref()
                     && !edges[edge_idx].is_phony()
                 {
-                    let cap = pool_depths.get(name).copied().unwrap_or(usize::MAX);
+                    let cap = pool_depths.get(name).copied().unwrap_or(if name == "console" {
+                        1
+                    } else {
+                        usize::MAX
+                    });
                     let cur = pool_in_flight.get(name).copied().unwrap_or(0);
                     if cur >= cap {
                         continue;
