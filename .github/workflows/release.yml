@@ -95,11 +95,19 @@ jobs:
 
       - name: Package binaries
         run: |
-          mkdir -p "dist/gluon-${{ matrix.target }}"
-          cp "target/${{ matrix.target }}/dist/meson" "dist/gluon-${{ matrix.target }}/meson"
-          cp "target/${{ matrix.target }}/dist/ninja" "dist/gluon-${{ matrix.target }}/ninja"
-          cp "target/${{ matrix.target }}/dist/gluon-build" "dist/gluon-${{ matrix.target }}/gluon-build"
-          ls -la "dist/gluon-${{ matrix.target }}"
+          dest="dist/gluon-${{ matrix.target }}"
+          mkdir -p "$dest"
+          cp "target/${{ matrix.target }}/dist/meson" "$dest/meson"
+          cp "target/${{ matrix.target }}/dist/ninja" "$dest/ninja"
+          cp "target/${{ matrix.target }}/dist/gluon-build" "$dest/gluon-build"
+          cp crates/ninja/LICENSE-APACHE "$dest/LICENSE-APACHE"
+          cp crates/meson/LICENSE-MIT "$dest/LICENSE-MIT"
+          cp crates/graph/LICENSE-APACHE "$dest/LICENSE-APACHE-graph"
+          cp crates/state/LICENSE-APACHE "$dest/LICENSE-APACHE-state"
+          cp crates/engine/LICENSE-APACHE "$dest/LICENSE-APACHE-engine"
+          cp crates/meson/NOTICE "$dest/NOTICE-meson"
+          cp crates/ninja/NOTICE "$dest/NOTICE-ninja"
+          ls -la "$dest"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -148,7 +156,7 @@ jobs:
           for dir in dist/gluon-*; do
             name=$(basename "$dir")
             chmod +x "$dir/meson" "$dir/ninja" "$dir/gluon-build"
-            zip -9 --junk-paths "dist/zips/$name.zip" "$dir/meson" "$dir/ninja" "$dir/gluon-build"
+            zip -9 --junk-paths "dist/zips/$name.zip" "$dir"/*
           done
           cd dist/zips
           sha256sum *.zip | LC_ALL=C sort -k2 > SHA256SUMS

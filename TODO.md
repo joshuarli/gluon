@@ -3,14 +3,6 @@
 Prefix: GLU
 Next: 14
 
-### GLU-7 · P2 · release zips omit the license texts
-- **Area:** release
-- **Where:** `.github/workflows/release.yml:151`
-- **Problem:** The zip contains only `meson`, `ninja`, and `gluon-build`. `graph`, `state`, and `engine` declare Apache-2.0 and have no `LICENSE` file in the tree. `meson` and `ninja` have texts that are not packed.
-- **Recommendation:** Ship the license texts and notices next to the binaries, and add the missing per-crate texts.
-- **Fix with:** none
-- **Effort:** S
-
 ### GLU-9 · P3 · engine is not on the user build path
 - **Area:** engine
 - **Where:** `crates/engine/src/lib.rs:38`
