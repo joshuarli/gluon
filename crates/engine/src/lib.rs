@@ -1,11 +1,5 @@
-//! Shared execution engine (S7/S8). Executes a `graph::State` directly.
-//! S8: queue-driven scheduling helper for efficient metadata scans.
-
 use std::collections::VecDeque;
 
-/// Queue-driven ready scheduler (S8). Callers push newly-ready edge
-/// indices; the engine pops in FIFO order (deterministic, no full
-/// graph rescans for each dispatch).
 #[derive(Debug, Default)]
 pub struct QueueScheduler {
     queue: VecDeque<usize>,

@@ -6,6 +6,7 @@ tools (`meson`, `ninja`, `gluon-build` in `bins/`). Library crates live in
 [docs/architecture.md](docs/architecture.md),
 [docs/decisions.md](docs/decisions.md), [docs/testing.md](docs/testing.md),
 [docs/status.md](docs/status.md).
+Open defects: [TODO.md](TODO.md).
 
 Build: `cargo build --profile dist --locked`
 Test: `cargo test --profile dist --locked`
@@ -14,8 +15,9 @@ Benchmarks: `tests/benchmarks/run.sh` (needs `perf-gate-ready`)
 
 Invariants:
 
-- Engine never depends on Meson semantics; both front ends lower to the
-  shared typed graph (`crates/graph`, `crates/engine`, `crates/state`).
+- User builds run in `crates/ninja`. `crates/engine` must not depend on
+  Meson semantics. Meson setup writes `build.ninja` and does not execute
+  the typed graph.
 - Parity is observable behavior (artifacts, command sets, rebuild behavior,
   exit codes), not text; `tests/differential/expected-fail` lists divergences
   one per line with a one-line cause, and a listed fixture that passes fails

@@ -1,4 +1,4 @@
-//! Persistent graph snapshot (S8). Conservative invalidation: a snapshot
+//! Persistent graph snapshot. Conservative invalidation: a snapshot
 //! is valid only if build.ninja is present and not newer than the
 //! snapshot; anything else forces a full reparse (safe fallback).
 

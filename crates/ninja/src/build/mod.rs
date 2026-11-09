@@ -1,5 +1,5 @@
-//! Build orchestration. Log/deps state lives in the `state` crate (S7);
-//! re-exported here so existing `super::log` etc. paths keep working.
+//! Build orchestration. Log and deps state live in the `state` crate and are
+//! re-exported here.
 
 pub use state::depfile;
 pub use state::deps_log;

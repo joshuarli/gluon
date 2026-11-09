@@ -2,8 +2,7 @@
 //!
 //! Implements the subset of the format needed by the upstream
 //! `output_test.py` suite: `rule`, `build`, `default`, top-level `var = ...`
-//! bindings, and indented per-edge bindings. `subninja` / `include` /
-//! `pool` are stubbed and can be added in later phases.
+//! bindings, and indented per-edge bindings.
 //!
 //! The parser is intentionally tolerant: unknown statements at the top
 //! level are reported as errors with a line number.

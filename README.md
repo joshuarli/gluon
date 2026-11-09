@@ -25,13 +25,7 @@ grep -F 'gluon-aarch64-apple-darwin.zip' SHA256SUMS | shasum -a 256 -c -
 ```
 
 Consumer installers: from `~/usr`, run `sh sync tools gluon`; from
-`~/d/view`, run `make toolchain`.
-
-Build from source:
-
-```sh
-cargo build --profile dist --locked
-```
+`~/d/view`, run `make toolchain`. Building from source is `cargo build --profile dist --locked`.
 
 ## Run
 

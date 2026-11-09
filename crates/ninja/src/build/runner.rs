@@ -9,8 +9,7 @@
 //! Pool depth limits are honored: each edge whose rule (or per-edge
 //! binding) sets `pool = name` is dispatched only while the pool's
 //! in-flight count is below its declared `depth`. The implicit `console`
-//! pool defaults to depth 1; full terminal-locking semantics for it
-//! still land in a later phase.
+//! pool defaults to depth 1.
 
 use super::depfile;
 use super::deps_log::DepsLog;
@@ -93,8 +92,6 @@ pub fn run_targets(
 
     let real_count = plan.iter().filter(|&&i| !state.edges[i].is_phony()).count();
     if opts.dry_run {
-        // Dry run (S8): print planned commands without dispatching.
-        // Honors dirtiness minimally (clean phony-only plans print nothing).
         let mode = Mode::detect();
         let _ = mode;
         let mut n = 0usize;
@@ -209,8 +206,6 @@ fn schedule(
     // sets `pool = name` may not start while `pool_in_flight[name] >=
     // pools[name]`. The implicit `console` pool has depth 1.
     let mut pool_in_flight: HashMap<String, usize> = HashMap::new();
-    // S8 efficient scan: borrow pools rather than cloning the full map;
-    // console defaults to depth 1 when undeclarated (handled at lookup).
     let pool_depths: &HashMap<String, usize> = &state.pools;
     // Tracks whether we actually dispatched any subprocess work. If
     // every edge in the plan was skipped (clean / phony) we still owe

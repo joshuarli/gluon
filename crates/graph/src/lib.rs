@@ -1,10 +1,5 @@
-//! Explicit build graph shared by frontends (P-2). S8: argv evaluation
-//! (shell kept as primary; argv is measured scaffolding), interning and
-//! arena for hot paths.
-
 use std::collections::HashMap;
 
-/// String interner for S8: deduplicates rule names, paths and commands.
 #[derive(Debug, Default)]
 pub struct Interner {
     map: HashMap<String, u32>,
@@ -43,8 +38,6 @@ impl Interner {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Handle(u32);
 
-/// Arena allocator for graph nodes (S8). Stores values in a Vec; handles
-/// are stable indices. No holes (generators only).
 #[derive(Debug)]
 pub struct Arena<T> {
     vec: Vec<T>,
@@ -84,8 +77,6 @@ impl<T> Arena<T> {
     }
 }
 
-/// Structured command (P-2 argv, S8). Shell semantics stay primary;
-/// `argv` is populated from rule bindings for measurement only.
 #[derive(Debug, Clone, Default)]
 pub struct Command {
     pub shell: String,

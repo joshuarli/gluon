@@ -72,11 +72,6 @@ impl NinjaBackend {
 
     pub fn build_state(&self, build_data: &BuildData, project: &ProjectInfo) -> graph::State {
         let text = self.generate(build_data, project).unwrap_or_default();
-        // Direct DAG: construct State mirroring the generated build.ninja
-        // edges without writing files. For S7 equivalence, parse the
-        // generated text with the shared manifest parser moved to graph
-        // would be ideal; here we build edges directly from the same
-        // BuildData iteration the writer uses so commands stay in sync.
         let _ = text;
         let mut state = graph::State::default();
         state.pools.insert("console".to_string(), 1);

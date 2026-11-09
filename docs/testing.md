@@ -12,7 +12,7 @@ Muon is informational.
 The expected-fail ledger (`tests/differential/expected-fail`) lists
 fixtures known to diverge, one per line with a one-line cause. The harness
 fails on any unlisted mismatch and on any listed fixture that now passes.
-The ledger is empty when the campaign closed.
+The ledger is empty.
 
 Gates, narrowest first:
 
@@ -23,14 +23,12 @@ Gates, narrowest first:
   `rust:1.98`, `--platform linux/amd64`, `x86_64-unknown-linux-musl`) that
   run `--version` in the container. CI builds the same target directly with
   `musl-tools` (see [decisions.md](decisions.md)).
-- `tests/benchmarks/run.sh` — cold Meson setup, reconfigure, Ninja no-op at
-  1K/10K/100K edges, one-source/one-header incremental rebuild; CPU/wall/
-  peak RSS per leg, interleaved baseline and candidate, median over
-  repeats. Time-based gates run only when `perf-gate-ready` exits 0, and a
-  second pass with `-1` right after; a deferred gate never counts as a
-  pass. The close gate is "no slower than the references beyond the
-  observed spread" (CPU-time median); a regression beyond the spread, or a
-  deferred gate, blocks the work.
+- `tests/benchmarks/run.sh` — cold Meson setup, reconfigure, Ninja `-n` at
+  1K/10K/100K edges, and a one-file incremental rebuild. The script prints
+  each run. Rustybench harnesses in `crates/*/benches` time parse and plan
+  and count allocations. Time-based gates run only when `perf-gate-ready`
+  exits 0, and again with `-1` immediately after. A deferred gate is not a
+  pass.
 
 Qualification (`~/d/play`, read-only): drive libplacebo 7.387.0 with the
 Metal patch and SPIRV-Cross vulkan-sdk 1.4.363.0 through gluon `meson` +

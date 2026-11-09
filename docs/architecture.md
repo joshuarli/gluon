@@ -1,30 +1,14 @@
 # Architecture
 
-Workspace layout: [`Cargo.toml`](../Cargo.toml) enumerates the members.
+Workspace members are listed in [`Cargo.toml`](../Cargo.toml).
 
-- `crates/graph` — the shared typed graph (commands, inputs, outputs,
-  dep types, env, cwd, pools, dyndep metadata) both front ends lower to.
-- `crates/state` — build logs and dep state (single owner; `.ninja_log`,
-  deps/log persistence).
-- `crates/engine` — the shared executor; never depends on Meson semantics.
-- `crates/meson` — Meson front end (lexer/parser/bytecode VM → graph →
-  `build.ninja` plus introspection files in `meson-info/`).
-- `crates/ninja` — Ninja front end (parser, scheduler, dyndep/depfile/log,
-  jobserver) reusing engine and state.
-- `bins/meson`, `bins/ninja`, `bins/build` — thin wrappers. `bins/build`
-  dispatches `gluon-build [meson|ninja] [args...]`.
+- `crates/graph` holds `State`, `Rule`, and `Edge`.
+- `crates/state` owns `.ninja_log` and `.ninja_deps`.
+- `crates/ninja` parses the manifest, schedules edges, and runs them. This is the build users run.
+- `crates/meson` is the Meson front end. Setup writes `build.ninja` and `meson-info/`. Compile, test, and install invoke `ninja` from `PATH`.
+- `crates/engine` is a queue helper plus `execute`, which forwards to `ninja::build::run`. No binary calls it. It does not depend on Meson semantics.
+- `bins/meson`, `bins/ninja`, and `bins/build` are wrappers. `gluon-build meson` builds a fresh argument list. `gluon-build ninja` calls `ninja::main_entry`, which reads the process arguments again.
 
-Interchange: `build.ninja` generation is retained for external
-compatibility; the `build` binary lowers Meson input directly to the typed
-graph, and equivalence of the direct-DAG and reparsed-`build.ninja` paths is
-covered by tests (see [testing.md](testing.md)).
+`build.ninja` is the interchange file. `NinjaBackend::build_state` builds a typed graph for the equivalence test only.
 
-CLI compatibility (the stable contract):
-
-- Upstream Meson argument order: `setup <builddir> <srcdir>` works on the
-  `meson` binary.
-- `build.ninja` remains the interchange format for external tools.
-- The engine/meson split is the stable internal boundary.
-
-Not in scope: a CMake front end, network features, Windows compatibility
-(the executor is intentionally not a Windows design driver).
+`meson setup <builddir> <srcdir>` keeps upstream argument order. There is no CMake front end, and the executor is not a Windows design.
