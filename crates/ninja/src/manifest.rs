@@ -103,6 +103,15 @@ fn parse_into(
             break;
         }
         let line_no = p.line;
+        if let Some(edge) = p
+            .try_simple_build(scope)
+            .map_err(|e| with_line(line_no, &e))?
+        {
+            let idx = state.edges.len();
+            state.producers.insert(edge.outputs[0].clone(), idx);
+            state.edges.push(edge);
+            continue;
+        }
         let word = p.word();
         match word.as_str() {
             "rule" => {
@@ -360,6 +369,115 @@ impl<'a> Parser<'a> {
     /// indicating an indented continuation of the previous block.
     fn peek_indent(&self) -> bool {
         matches!(self.bytes.get(self.pos), Some(b' ' | b'\t'))
+    }
+
+    fn try_simple_build(&mut self, scope: &Scope) -> Result<Option<Edge>, String> {
+        let saved_pos = self.pos;
+        let saved_line = self.line;
+        match self.simple_build(scope) {
+            Ok(None) => {
+                self.pos = saved_pos;
+                self.line = saved_line;
+                Ok(None)
+            }
+            other => other,
+        }
+    }
+
+    fn simple_build(&mut self, scope: &Scope) -> Result<Option<Edge>, String> {
+        let bytes = self.bytes;
+        if self.pos >= bytes.len()
+            || !(bytes[self.pos..].starts_with(b"build ")
+                || bytes[self.pos..].starts_with(b"build\t"))
+        {
+            return Ok(None);
+        }
+        self.pos += 5;
+        self.skip_spaces();
+        let Some(out) = self.plain_token() else {
+            return Ok(None);
+        };
+        self.skip_spaces();
+        if self.peek() != Some(':') {
+            return Ok(None);
+        }
+        self.bump();
+        self.skip_spaces();
+        let Some(rule) = self.plain_word() else {
+            return Ok(None);
+        };
+        self.skip_spaces();
+        let Some(inp) = self.plain_token() else {
+            return Ok(None);
+        };
+        self.skip_spaces();
+        match self.peek() {
+            Some('\n') => {
+                self.bump();
+            }
+            None => {}
+            _ => return Ok(None),
+        }
+        if self.peek_indent() {
+            return Ok(None);
+        }
+        let rule_key = if rule == "phony" {
+            rule
+        } else {
+            scope
+                .rules
+                .get(&rule)
+                .cloned()
+                .ok_or_else(|| format!("unknown build rule '{rule}'"))?
+        };
+        Ok(Some(Edge {
+            rule: rule_key,
+            outputs: vec![out],
+            implicit_outputs: vec![],
+            inputs: vec![inp],
+            implicit_inputs: vec![],
+            order_only_inputs: vec![],
+            bindings: HashMap::new(),
+            dyndep: None,
+        }))
+    }
+
+    fn plain_token(&mut self) -> Option<String> {
+        let start = self.pos;
+        let bytes = self.bytes;
+        let mut i = start;
+        while i < bytes.len() {
+            match bytes[i] {
+                b' ' | b'\t' | b'\n' | b':' | b'|' | b'$' => break,
+                _ => i += 1,
+            }
+        }
+        if i == start {
+            return None;
+        }
+        let s = std::str::from_utf8(&bytes[start..i]).ok()?;
+        self.pos = i;
+        Some(s.to_string())
+    }
+
+    fn plain_word(&mut self) -> Option<String> {
+        let start = self.pos;
+        let bytes = self.bytes;
+        let mut i = start;
+        while i < bytes.len() {
+            let c = bytes[i];
+            if c.is_ascii_alphanumeric() || c == b'_' || c == b'-' || c == b'.' {
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        if i == start {
+            return None;
+        }
+        let s = std::str::from_utf8(&bytes[start..i]).ok()?;
+        self.pos = i;
+        Some(s.to_string())
     }
 
     /// Reads the next path-ish token on a build line. Returns None when
@@ -660,6 +778,20 @@ mod tests {
         assert_eq!(state.edges[0].outputs, vec!["foo.o".to_string()]);
         assert_eq!(state.edges[0].inputs, vec!["foo.c".to_string()]);
         assert_eq!(state.producers.get("foo.o"), Some(&0));
+    }
+
+    #[test]
+    fn build_edge_binding_and_extra_input_use_the_general_parser() {
+        let src = "rule cc\n  command = cc\nbuild foo.o: cc a.c b.c\n  depfile = foo.d\n";
+        let state = parse(src).unwrap();
+        assert_eq!(
+            state.edges[0].inputs,
+            vec!["a.c".to_string(), "b.c".to_string()]
+        );
+        assert_eq!(
+            state.edges[0].bindings.get("depfile").map(String::as_str),
+            Some("foo.d")
+        );
     }
 
     #[test]
