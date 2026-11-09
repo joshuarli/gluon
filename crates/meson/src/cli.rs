@@ -156,8 +156,7 @@ impl Cli {
     }
 
     fn parse_setup(args: &[String]) -> CliCommand {
-        let mut source_dir = String::new();
-        let mut build_dir = String::new();
+        let mut positionals: Vec<String> = Vec::new();
         let mut cli_options = Vec::new();
         let mut cross_file = None;
         let mut native_file = None;
@@ -186,26 +185,34 @@ impl Cli {
                 reconfigure = true;
             } else if arg == "--wipe" {
                 wipe = true;
-            } else if source_dir.is_empty() {
-                source_dir = arg.clone();
-            } else if build_dir.is_empty() {
-                build_dir = arg.clone();
+            } else {
+                positionals.push(arg.clone());
             }
             i += 1;
         }
 
-        // If only one directory given, it could be either source or build
-        if build_dir.is_empty() && !source_dir.is_empty() {
-            if Path::new(&source_dir).join("meson.build").exists() {
-                build_dir = "builddir".to_string();
+        let (source_dir, build_dir) = if positionals.is_empty() {
+            (".".to_string(), "builddir".to_string())
+        } else if positionals.len() == 1 {
+            let only = positionals[0].clone();
+            if Path::new(&only).join("meson.build").exists() {
+                (only, "builddir".to_string())
             } else {
-                build_dir = source_dir.clone();
-                source_dir = ".".to_string();
+                (".".to_string(), only)
             }
-        }
-        if source_dir.is_empty() {
-            source_dir = ".".to_string();
-        }
+        } else {
+            let first = positionals[0].clone();
+            let second = positionals[1].clone();
+            let first_is_src = Path::new(&first).join("meson.build").exists();
+            let second_is_src = Path::new(&second).join("meson.build").exists();
+            if second_is_src && !first_is_src {
+                (second, first)
+            } else if first_is_src && !second_is_src {
+                (first, second)
+            } else {
+                (second, first)
+            }
+        };
 
         CliCommand::Setup(SetupArgs {
             source_dir,

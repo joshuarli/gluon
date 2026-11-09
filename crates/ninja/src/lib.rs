@@ -20,7 +20,7 @@ pub fn main_entry() -> ExitCode {
     };
 
     if opts.show_version {
-        println!("1.13.1");
+        println!("1.13.2");
         return ExitCode::SUCCESS;
     }
 

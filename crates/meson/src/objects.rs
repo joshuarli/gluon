@@ -368,6 +368,8 @@ pub struct GeneratedListData {
     pub sources: Vec<String>,
     pub extra_args: Vec<String>,
     pub preserve_path_from: Option<String>,
+    pub depends: Vec<Object>,
+    pub outputs: Vec<String>,
 }
 
 #[derive(Debug, Clone)]

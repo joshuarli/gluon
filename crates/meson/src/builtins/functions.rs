@@ -912,8 +912,15 @@ fn collect_sources(obj: &Object, sources: &mut Vec<String>) {
             }
         }
         Object::File(f) => sources.push(f.path.clone()),
-        Object::GeneratedList(_) | Object::CustomTarget(_) | Object::CustomTargetIndex(_, _) => {
-            // These will be handled during build graph construction
+        Object::GeneratedList(data) => {
+            for out in &data.outputs {
+                sources.push(format!("<genout:{}>", out));
+            }
+            if data.outputs.is_empty() {
+                sources.push(format!("<generated:{}>", obj.to_display_string()));
+            }
+        }
+        Object::CustomTarget(_) | Object::CustomTargetIndex(_, _) => {
             sources.push(format!("<generated:{}>", obj.to_display_string()));
         }
         _ => {}

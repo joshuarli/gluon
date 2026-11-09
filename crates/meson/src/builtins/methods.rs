@@ -2273,6 +2273,17 @@ fn generator_process(vm: &mut VM, obj: &Object, args: &[CallArg]) -> Result<Obje
         let extra_args = VM::get_arg_string_array(args, "extra_args");
         let preserve_path_from =
             VM::get_arg_str(args, "preserve_path_from", usize::MAX).map(String::from);
+        let mut depends: Vec<Object> = Vec::new();
+        if let Some(dep_val) = VM::get_arg_value(args, "depends") {
+            match dep_val {
+                Object::Array(arr) => depends.extend(arr.iter().cloned()),
+                Object::CustomTarget(_) | Object::CustomTargetIndex(_, _) => {
+                    depends.push(dep_val.clone())
+                }
+                Object::File(_) => depends.push(dep_val.clone()),
+                _ => {}
+            }
+        }
 
         if let Some(ref base_dir) = preserve_path_from {
             for source in &sources {
@@ -2289,11 +2300,66 @@ fn generator_process(vm: &mut VM, obj: &Object, args: &[CallArg]) -> Result<Obje
             }
         }
 
+        let exe_str = match &*g.exe {
+            Object::ExternalProgram(p) => p.path.clone(),
+            Object::String(s) => s.clone(),
+            Object::File(f) => f.path.clone(),
+            other => other.to_string_value(),
+        };
+        let mut outputs: Vec<String> = Vec::new();
+        for source in &sources {
+            let plainname = std::path::Path::new(source)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| source.clone());
+            let basename = std::path::Path::new(source)
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| source.clone());
+            let templates = if g.output.is_empty() {
+                vec![plainname.clone()]
+            } else {
+                g.output.clone()
+            };
+            for tmpl in templates {
+                let out = tmpl
+                    .replace("@PLAINNAME@", &plainname)
+                    .replace("@BASENAME@", &basename);
+                let mut command = vec![exe_str.clone()];
+                command.extend(g.arguments.iter().cloned());
+                command.extend(extra_args.iter().cloned());
+                let id = format!("generator:{}@{}", out, vm.current_subdir);
+                let ct = CustomTarget {
+                    name: out.clone(),
+                    id: id.clone(),
+                    command,
+                    input: vec![source.clone()],
+                    output: vec![out.clone()],
+                    depends: depends.clone(),
+                    depend_files: Vec::new(),
+                    depfile: g.depfile.clone(),
+                    capture: g.capture,
+                    feed: false,
+                    install: false,
+                    install_dir: Vec::new(),
+                    install_tag: Vec::new(),
+                    build_by_default: true,
+                    build_always_stale: false,
+                    env: HashMap::new(),
+                    subdir: vm.current_subdir.clone(),
+                };
+                vm.build_data.custom_targets.push(ct);
+                outputs.push(out);
+            }
+        }
+
         Ok(Object::GeneratedList(GeneratedListData {
             generator: g.clone(),
             sources,
             extra_args,
             preserve_path_from,
+            depends,
+            outputs,
         }))
     } else {
         Err("Not a generator".to_string())

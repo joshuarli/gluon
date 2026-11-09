@@ -206,17 +206,23 @@ impl NinjaBackend {
         // Compile each source file
         for source in &target.sources {
             if source.starts_with("<generated:") {
-                // Generated source — add as order dependency
                 continue;
             }
-
-            let source_path = if target.subdir.is_empty() {
+            let genout = source.strip_prefix("<genout:").and_then(|s| s.strip_suffix('>'));
+            let source_path = if let Some(gout) = genout {
+                if target.subdir.is_empty() {
+                    gout.to_string()
+                } else {
+                    format!("{}/{}", target.subdir, gout)
+                }
+            } else if target.subdir.is_empty() {
                 format!("{}/{}", self.source_root, source)
             } else {
                 format!("{}/{}/{}", self.source_root, target.subdir, source)
             };
 
-            let obj_name = source.replace('/', "_").replace('.', "_");
+            let obj_src = genout.as_deref().unwrap_or(source);
+            let obj_name = obj_src.replace('/', "_").replace('.', "_");
             let obj_path = format!("{}{}_{}.o", target_dir, target.name, obj_name);
 
             // Collect compile args
@@ -468,6 +474,50 @@ impl NinjaBackend {
             "CUSTOM_COMMAND"
         };
 
+        let mut order_only: Vec<String> = Vec::new();
+        for dep in &ct.depends {
+            match dep {
+                Object::CustomTarget(r) => {
+                    let d = if r.subdir.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{}/", r.subdir)
+                    };
+                    for o in &r.outputs {
+                        order_only.push(format!("{}{}", d, o));
+                    }
+                }
+                Object::CustomTargetIndex(r, idx) => {
+                    let d = if r.subdir.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{}/", r.subdir)
+                    };
+                    if let Some(o) = r.outputs.get(*idx) {
+                        order_only.push(format!("{}{}", d, o));
+                    }
+                }
+                Object::File(f) => {
+                    if f.is_built {
+                        let d = if f.subdir.is_empty() {
+                            String::new()
+                        } else {
+                            format!("{}/", f.subdir)
+                        };
+                        order_only.push(format!("{}{}", d, f.path));
+                    } else {
+                        let d = if f.subdir.is_empty() {
+                            String::new()
+                        } else {
+                            format!("{}/", f.subdir)
+                        };
+                        order_only.push(format!("{}{}", d, f.path));
+                    }
+                }
+                _ => {}
+            }
+        }
+
         write!(
             out,
             "build {}: {} {}",
@@ -476,6 +526,9 @@ impl NinjaBackend {
             inputs.join(" ")
         )
         .unwrap();
+        if !order_only.is_empty() {
+            write!(out, " | {}", order_only.join(" ")).unwrap();
+        }
         writeln!(out).unwrap();
         writeln!(out, "  COMMAND = {}", shell_escape_command(&command_parts)).unwrap();
         writeln!(out, "  DESC = Generating {}", ct.name).unwrap();

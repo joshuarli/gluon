@@ -1,4 +1,3 @@
-meson/generator-depends : generator.process(depends:) ignored; candidate 1 target vs 2, 2 edges vs 5
 meson/libplacebo-feature-not : get_option('prefer_static') is Feature not Bool; not prefer_static rejected (libplacebo glsl)
 meson/libplacebo-multiline-plus : multiline '+' in warning() rejected by parser (libplacebo warning style)
 meson/multiline-plus : multiline '+' in warning() rejected by parser
