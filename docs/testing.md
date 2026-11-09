@@ -20,7 +20,7 @@ Gates, narrowest first:
 - `tests/differential/run.sh` — the fixture corpus; exit 0 only with the
   ledger honored.
 - `tests/upstream/musl.sh` — static-musl bins via Docker (pinned
-  `rust:1.98`, `--platform linux/amd64`, `x86_64-unknown-linux-musl`) that
+  `rust:nightly-2026-09-15`, `--platform linux/amd64`, `x86_64-unknown-linux-musl`) that
   run `--version` in the container. CI builds the same target directly with
   `musl-tools` (see [decisions.md](decisions.md)).
 - `tests/benchmarks/run.sh` — cold Meson setup, reconfigure, Ninja `-n` at

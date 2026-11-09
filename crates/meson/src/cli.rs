@@ -672,6 +672,21 @@ impl Cli {
         // Create meson-logs dir
         let logs_dir = format!("{}/meson-logs", build_dir);
         let _ = std::fs::create_dir_all(&logs_dir);
+        let log_path = format!("{}/meson-log.txt", logs_dir);
+        let mut log = String::new();
+        log.push_str("The Meson build system\n");
+        log.push_str(&format!("Version: {} (oxidized-meson)\n", crate::VERSION));
+        log.push_str(&format!("Source dir: {}\n", source_dir));
+        log.push_str(&format!("Build dir: {}\n", build_dir));
+        log.push_str("Build type: native build\n");
+        log.push_str(&format!(
+            "Command: meson setup {} {}\n",
+            source_dir, build_dir
+        ));
+        for (k, v) in &args.options {
+            log.push_str(&format!("option: {}={}\n", k, v));
+        }
+        let _ = std::fs::write(&log_path, &log);
 
         eprintln!("The Meson build system");
         eprintln!("Version: {} (oxidized-meson)", crate::VERSION);
@@ -757,12 +772,28 @@ impl Cli {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Cannot read {}: {}", build_file, e);
+                let _ = {
+                    use std::io::Write;
+                    std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&log_path)
+                        .and_then(|mut f| writeln!(f, "ERROR: Cannot read {}: {}", build_file, e))
+                };
                 return 1;
             }
         };
 
         if let Err(e) = interp.run(&source) {
             eprintln!("ERROR: {}", e);
+            let _ = {
+                use std::io::Write;
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&log_path)
+                    .and_then(|mut f| writeln!(f, "ERROR: {}", e))
+            };
             return 1;
         }
 
@@ -777,6 +808,14 @@ impl Cli {
             Ok(n) => n,
             Err(e) => {
                 eprintln!("ERROR generating build.ninja: {}", e);
+                let _ = {
+                    use std::io::Write;
+                    std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&log_path)
+                        .and_then(|mut f| writeln!(f, "ERROR generating build.ninja: {}", e))
+                };
                 return 1;
             }
         };
@@ -810,6 +849,17 @@ impl Cli {
         eprintln!();
         eprintln!("Found ninja at: {}", which_ninja());
         eprintln!();
+        let _ = {
+            use std::io::Write;
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_path)
+                .and_then(|mut f| {
+                    writeln!(f, "Build targets in project: {}", interp.vm.build_data.targets.len())?;
+                    writeln!(f, "Found ninja at: {}", which_ninja())
+                })
+        };
 
         0
     }
