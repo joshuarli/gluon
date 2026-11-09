@@ -64,12 +64,13 @@ fn visit(
     let Some(&idx) = state.producers.get(target) else {
         return Ok(()); // source file
     };
+    if on_stack.contains(&idx) {
+        return Err(format!("dependency cycle through '{target}'"));
+    }
     if !seen.insert(idx) {
         return Ok(());
     }
-    if !on_stack.insert(idx) {
-        return Err(format!("dependency cycle through '{target}'"));
-    }
+    on_stack.insert(idx);
     let edge = &state.edges[idx];
     for inp in edge
         .inputs
@@ -87,4 +88,68 @@ fn visit(
     on_stack.remove(&idx);
     order.push(idx);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::Edge;
+    use std::collections::HashMap;
+
+    fn edge(out: &str, input: &str) -> Edge {
+        Edge {
+            rule: "phony".to_string(),
+            outputs: vec![out.to_string()],
+            implicit_outputs: vec![],
+            inputs: vec![input.to_string()],
+            implicit_inputs: vec![],
+            order_only_inputs: vec![],
+            bindings: HashMap::new(),
+            dyndep: None,
+        }
+    }
+
+    fn state_of(edges: Vec<Edge>) -> State {
+        let mut state = State::default();
+        for (idx, edge) in edges.iter().enumerate() {
+            state.producers.insert(edge.outputs[0].clone(), idx);
+        }
+        state.edges = edges;
+        state
+    }
+
+    #[test]
+    fn cycle_is_rejected() {
+        let state = state_of(vec![edge("a", "b"), edge("b", "a")]);
+        let err = build_plan(&state, &["a".to_string()]).unwrap_err();
+        assert!(err.contains("cycle"), "{err}");
+    }
+
+    #[test]
+    fn self_cycle_is_rejected() {
+        let state = state_of(vec![edge("a", "a")]);
+        let err = build_plan(&state, &["a".to_string()]).unwrap_err();
+        assert!(err.contains("cycle"), "{err}");
+    }
+
+    #[test]
+    fn shared_dependency_is_not_a_cycle() {
+        let state = state_of(vec![
+            edge("c", "src"),
+            edge("a", "c"),
+            edge("b", "c"),
+            Edge {
+                rule: "phony".to_string(),
+                outputs: vec!["top".to_string()],
+                implicit_outputs: vec![],
+                inputs: vec!["a".to_string(), "b".to_string()],
+                implicit_inputs: vec![],
+                order_only_inputs: vec![],
+                bindings: HashMap::new(),
+                dyndep: None,
+            },
+        ]);
+        let order = build_plan(&state, &["top".to_string()]).unwrap();
+        assert_eq!(order, vec![0, 1, 2, 3]);
+    }
 }

@@ -51,14 +51,6 @@ Next: 14
 - **Fix with:** none
 - **Effort:** S
 
-### GLU-8 · P2 · cycle detection cannot report a cycle
-- **Area:** ninja planner
-- **Where:** `crates/ninja/src/build/plan.rs:67`
-- **Problem:** `visit` returns when `seen.insert` fails, before `on_stack` is checked. A cycle is ignored. Nothing in the tree tests a cyclic manifest.
-- **Recommendation:** Check `on_stack` before the seen early-return, and add a manifest that must fail with a cycle error.
-- **Fix with:** none
-- **Effort:** S
-
 ### GLU-9 · P3 · engine is not on the user build path
 - **Area:** engine
 - **Where:** `crates/engine/src/lib.rs:38`
