@@ -65,6 +65,305 @@ impl NinjaBackend {
         Ok(out)
     }
 
+    pub fn build_state(&self, build_data: &BuildData, project: &ProjectInfo) -> graph::State {
+        let text = self.generate(build_data, project).unwrap_or_default();
+        // Direct DAG: construct State mirroring the generated build.ninja
+        // edges without writing files. For S7 equivalence, parse the
+        // generated text with the shared manifest parser moved to graph
+        // would be ideal; here we build edges directly from the same
+        // BuildData iteration the writer uses so commands stay in sync.
+        let _ = text;
+        let mut state = graph::State::default();
+        state.pools.insert("console".to_string(), 1);
+        // Rules (subset: compiler/linker/custom as written)
+        let mut add_rule = |s: &mut graph::State, name: &str, bindings: Vec<(&str, &str)>| {
+            let mut map = std::collections::HashMap::new();
+            for (k, v) in bindings {
+                map.insert(k.to_string(), v.to_string());
+            }
+            s.rules.insert(
+                name.to_string(),
+                graph::Rule {
+                    name: name.to_string(),
+                    bindings: map,
+                },
+            );
+        };
+        add_rule(
+            &mut state,
+            "c_COMPILER",
+            vec![("command", "cc $ARGS -MD -MQ $out -MF $DEPFILE -o $out -c $in"), ("deps", "gcc"), ("depfile", "$DEPFILE"), ("description", "Compiling C object $out")],
+        );
+        add_rule(
+            &mut state,
+            "cpp_COMPILER",
+            vec![("command", "c++ $ARGS -MD -MQ $out -MF $DEPFILE -o $out -c $in"), ("deps", "gcc"), ("depfile", "$DEPFILE"), ("description", "Compiling C++ object $out")],
+        );
+        add_rule(
+            &mut state,
+            "c_LINKER",
+            vec![("command", "cc $ARGS -o $out $in $LINK_ARGS"), ("description", "Linking target $out")],
+        );
+        add_rule(
+            &mut state,
+            "cpp_LINKER",
+            vec![("command", "c++ $ARGS -o $out $in $LINK_ARGS"), ("description", "Linking target $out")],
+        );
+        add_rule(
+            &mut state,
+            "STATIC_LINKER",
+            vec![("command", "rm -f $out && ar rcs $out $in"), ("description", "Linking static target $out")],
+        );
+        add_rule(
+            &mut state,
+            "CUSTOM_COMMAND",
+            vec![("command", "$COMMAND"), ("description", "$DESC"), ("restat", "1")],
+        );
+        add_rule(
+            &mut state,
+            "CUSTOM_COMMAND_DEP",
+            vec![("command", "$COMMAND"), ("description", "$DESC"), ("deps", "gcc"), ("depfile", "$DEPFILE"), ("restat", "1")],
+        );
+        add_rule(
+            &mut state,
+            "REGENERATE_BUILD",
+            vec![("command", "meson setup --reconfigure"), ("description", "Regenerating build files."), ("generator", "1")],
+        );
+        // Edges for targets (compile + link) mirroring write_target
+        for target in &build_data.targets {
+            let target_dir = if target.subdir.is_empty() {
+                String::new()
+            } else {
+                format!("{}/", target.subdir)
+            };
+            let lang = self.detect_target_language(target);
+            let mut object_files: Vec<String> = Vec::new();
+            let mut gen_order: Vec<String> = Vec::new();
+            for s in &target.sources {
+                if let Some(inner) = s.strip_prefix("<orderonly:").and_then(|v| v.strip_suffix('>')) {
+                    gen_order.push(inner.to_string());
+                }
+            }
+            for source in &target.sources {
+                if source.starts_with("<generated:") || source.starts_with("<orderonly:") {
+                    continue;
+                }
+                let lower = source.to_lowercase();
+                if lower.ends_with(".h") || lower.ends_with(".hpp") || lower.ends_with(".hh") || lower.ends_with(".hxx") {
+                    continue;
+                }
+                let genout = source.strip_prefix("<genout:").and_then(|s| s.strip_suffix('>'));
+                let source_path = if let Some(gout) = genout {
+                    gout.to_string()
+                } else if target.subdir.is_empty() {
+                    format!("{}/{}", self.source_root, source)
+                } else {
+                    format!("{}/{}/{}", self.source_root, target.subdir, source)
+                };
+                let obj_src = genout.as_deref().unwrap_or(source);
+                let obj_name = obj_src.replace('/', "_").replace('.', "_");
+                let obj_path = format!("{}{}_{}.o", target_dir, target.name, obj_name);
+                let file_lang = self.detect_file_language(obj_src, &lang);
+                let file_rule = format!("{}_COMPILER", file_lang);
+                let mut bindings = std::collections::HashMap::new();
+                bindings.insert("DEPFILE".to_string(), format!("{}.d", obj_path));
+                let mut args = Vec::new();
+                if target.implicit_include_directories {
+                    args.push(format!("-I{}", self.source_root));
+                    if !target.subdir.is_empty() {
+                        args.push(format!("-I{}/{}", self.source_root, target.subdir));
+                    }
+                    args.push(format!("-I{}", self.build_root));
+                    if !target.subdir.is_empty() {
+                        args.push(format!("-I{}/{}", self.build_root, target.subdir));
+                    }
+                }
+                for inc in &target.include_dirs {
+                    args.push(format!("-I{}/{}", self.source_root, inc));
+                    args.push(format!("-I{}/{}", self.build_root, inc));
+                }
+                if file_lang == "c" && !build_data.c_std.is_empty() && build_data.c_std != "none" {
+                    args.push(format!("-std={}", build_data.c_std));
+                }
+                if file_lang == "cpp" && !build_data.cpp_std.is_empty() && build_data.cpp_std != "none" {
+                    args.push(format!("-std={}", build_data.cpp_std));
+                }
+                match file_lang.as_str() {
+                    "c" => args.extend(target.c_args.iter().cloned()),
+                    "cpp" => args.extend(target.cpp_args.iter().cloned()),
+                    "rust" => args.extend(target.rust_args.iter().cloned()),
+                    _ => {}
+                }
+                for dep in &target.dependencies {
+                    if let Object::Dependency(d) = dep {
+                        args.extend(d.compile_args.iter().cloned());
+                        for inc in &d.include_dirs {
+                            args.push(format!("-I{}", inc));
+                        }
+                    }
+                }
+                if !args.is_empty() {
+                    bindings.insert("ARGS".to_string(), args.join(" "));
+                }
+                let edge = graph::Edge {
+                    rule: file_rule,
+                    outputs: vec![obj_path.clone()],
+                    implicit_outputs: vec![],
+                    inputs: vec![source_path],
+                    implicit_inputs: vec![],
+                    order_only_inputs: gen_order.clone(),
+                    bindings,
+                    dyndep: None,
+                };
+                let idx = state.edges.len();
+                for o in &edge.outputs {
+                    state.producers.insert(o.clone(), idx);
+                }
+                state.edges.push(edge);
+                object_files.push(obj_path);
+            }
+            let output_path = format!("{}{}", target_dir, target.output_name);
+            match target.target_type {
+                TargetType::Executable => {
+                    let link_rule = format!("{}_LINKER", lang);
+                    let mut link_args = Vec::new();
+                    for dep in &target.dependencies {
+                        if let Object::Dependency(d) = dep {
+                            link_args.extend(d.link_args.iter().cloned());
+                        }
+                    }
+                    link_args.extend(target.link_args.iter().cloned());
+                    let mut bindings = std::collections::HashMap::new();
+                    if !link_args.is_empty() {
+                        bindings.insert("LINK_ARGS".to_string(), link_args.join(" "));
+                    }
+                    let edge = graph::Edge {
+                        rule: link_rule,
+                        outputs: vec![output_path.clone()],
+                        implicit_outputs: vec![],
+                        inputs: object_files.clone(),
+                        implicit_inputs: vec![],
+                        order_only_inputs: vec![],
+                        bindings,
+                        dyndep: None,
+                    };
+                    let idx = state.edges.len();
+                    for o in &edge.outputs {
+                        state.producers.insert(o.clone(), idx);
+                    }
+                    state.edges.push(edge);
+                    if target.build_by_default {
+                        state.defaults.push(output_path);
+                    }
+                }
+                TargetType::StaticLibrary | TargetType::SharedLibrary | TargetType::SharedModule => {
+                    let link_rule = if target.target_type == TargetType::StaticLibrary {
+                        "STATIC_LINKER".to_string()
+                    } else {
+                        format!("{}_LINKER", lang)
+                    };
+                    let edge = graph::Edge {
+                        rule: link_rule,
+                        outputs: vec![output_path.clone()],
+                        implicit_outputs: vec![],
+                        inputs: object_files.clone(),
+                        implicit_inputs: vec![],
+                        order_only_inputs: vec![],
+                        bindings: std::collections::HashMap::new(),
+                        dyndep: None,
+                    };
+                    let idx = state.edges.len();
+                    for o in &edge.outputs {
+                        state.producers.insert(o.clone(), idx);
+                    }
+                    state.edges.push(edge);
+                    if target.build_by_default {
+                        state.defaults.push(output_path);
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Custom targets as edges (order-only deps preserved)
+        for ct in &build_data.custom_targets {
+            let target_dir = if ct.subdir.is_empty() {
+                String::new()
+            } else {
+                format!("{}/", ct.subdir)
+            };
+            let outputs: Vec<String> = ct.output.iter().map(|o| format!("{}{}", target_dir, o)).collect();
+            let inputs: Vec<String> = ct
+                .input
+                .iter()
+                .map(|i| {
+                    if Path::new(i).is_absolute() {
+                        i.clone()
+                    } else if ct.subdir.is_empty() {
+                        format!("{}/{}", self.source_root, i)
+                    } else {
+                        format!("{}/{}/{}", self.source_root, ct.subdir, i)
+                    }
+                })
+                .collect();
+            let mut order_only: Vec<String> = Vec::new();
+            for dep in &ct.depends {
+                match dep {
+                    Object::CustomTarget(r) => {
+                        let d = if r.subdir.is_empty() { String::new() } else { format!("{}/", r.subdir) };
+                        for o in &r.outputs {
+                            order_only.push(format!("{}{}", d, o));
+                        }
+                    }
+                    Object::CustomTargetIndex(r, idx) => {
+                        let d = if r.subdir.is_empty() { String::new() } else { format!("{}/", r.subdir) };
+                        if let Some(o) = r.outputs.get(*idx) {
+                            order_only.push(format!("{}{}", d, o));
+                        }
+                    }
+                    Object::File(f) => {
+                        if f.is_built {
+                            let d = if f.subdir.is_empty() { String::new() } else { format!("{}/", f.subdir) };
+                            order_only.push(format!("{}{}", d, f.path));
+                        } else if f.subdir.is_empty() {
+                            order_only.push(format!("{}/{}", self.source_root, f.path));
+                        } else {
+                            order_only.push(format!("{}/{}/{}", self.source_root, f.subdir, f.path));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let mut bindings = std::collections::HashMap::new();
+            bindings.insert("COMMAND".to_string(), shell_escape_command(&ct.command));
+            bindings.insert("DESC".to_string(), format!("Generating {}", ct.name));
+            if let Some(ref depfile) = ct.depfile {
+                bindings.insert("DEPFILE".to_string(), format!("{}{}", target_dir, depfile));
+            }
+            let rule = if ct.depfile.is_some() { "CUSTOM_COMMAND_DEP" } else { "CUSTOM_COMMAND" };
+            let edge = graph::Edge {
+                rule: rule.to_string(),
+                outputs: outputs.clone(),
+                implicit_outputs: vec![],
+                inputs,
+                implicit_inputs: vec![],
+                order_only_inputs: order_only,
+                bindings,
+                dyndep: None,
+            };
+            let idx = state.edges.len();
+            for o in &edge.outputs {
+                state.producers.insert(o.clone(), idx);
+            }
+            state.edges.push(edge);
+            if ct.build_by_default {
+                for o in outputs {
+                    state.defaults.push(o);
+                }
+            }
+        }
+        state
+    }
+
     fn write_rules(&self, out: &mut String, project: &ProjectInfo) -> Result<(), String> {
         // C compiler rule
         if project.languages.iter().any(|l| l == "c" || l == "objc") {

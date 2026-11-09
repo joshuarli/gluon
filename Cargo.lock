@@ -47,6 +47,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine"
+version = "0.1.0"
+dependencies = [
+ "graph",
+ "meson",
+ "ninja",
+ "state",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -69,6 +79,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
+name = "gluon-build"
+version = "0.1.0"
+dependencies = [
+ "meson",
+ "ninja",
+]
+
+[[package]]
 name = "gluon-meson"
 version = "0.1.0"
 dependencies = [
@@ -81,6 +99,10 @@ version = "0.1.0"
 dependencies = [
  "ninja",
 ]
+
+[[package]]
+name = "graph"
+version = "0.1.0"
 
 [[package]]
 name = "hashbrown"
@@ -121,6 +143,7 @@ name = "meson"
 version = "0.1.0"
 dependencies = [
  "glob",
+ "graph",
  "regex-lite",
  "serde",
  "serde_json",
@@ -132,6 +155,7 @@ dependencies = [
 name = "ninja"
 version = "0.1.0"
 dependencies = [
+ "graph",
  "libc",
 ]
 
@@ -221,6 +245,10 @@ dependencies = [
  "cpufeatures",
  "digest",
 ]
+
+[[package]]
+name = "state"
+version = "0.1.0"
 
 [[package]]
 name = "syn"
