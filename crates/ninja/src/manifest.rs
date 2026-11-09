@@ -93,6 +93,9 @@ fn parse_into(
     base_dir: &std::path::Path,
     next_scope: &mut usize,
 ) -> Result<(), String> {
+    let builds = count_build_stmts(src);
+    state.edges.reserve(builds);
+    state.producers.reserve(builds);
     let mut p = Parser::new(src);
     while !p.eof() {
         p.skip_blank_and_comments();
@@ -215,6 +218,22 @@ fn parse_into(
 
 fn with_line(line: usize, msg: &str) -> String {
     format!("line {line}: {msg}")
+}
+
+fn count_build_stmts(src: &str) -> usize {
+    let bytes = src.as_bytes();
+    let mut n = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let at_line = i == 0 || bytes[i - 1] == b'\n';
+        if at_line
+            && (bytes[i..].starts_with(b"build ") || bytes[i..].starts_with(b"build\t"))
+        {
+            n += 1;
+        }
+        i += 1;
+    }
+    n
 }
 
 struct Parser<'a> {
