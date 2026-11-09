@@ -11,9 +11,9 @@ CMake-less Meson dependency closure.
 - Goal: land `meson` + `ninja` + `build` in this repo; correctness parity
   against pinned Meson/Ninja baselines, qualification on `~/d/play`, then
   measured optimization.
-- Last accepted revision: `1ddd7a8 docs(plan): record S2 accepted and OD-4 reversal`.
-- Accepted: G0 (ground), S1 (import), S2 (harness + probe), S3 (refresh). Red: none. Parked: none.
-- Next slice: **S4 (harden frontend)** — compiler discovery, quoting, paths, cross, and libplacebo frontend gaps.
+- Last accepted revision: `3580b00 docs(plan): record S3 accepted`.
+- Accepted: G0 (ground), S1 (import), S2 (harness + probe), S3 (refresh), S4 (harden frontend), S5 (harden executor). Red: none. Parked: none.
+- Next slice: **S6 (qualify)** — CMake-less play closure on macOS arm64 and musl artifact in Docker.
 - Resume prompt: `run the next slice per plan.md; first command: git log --oneline -3 && git status --short`.
 
 ## Charter
