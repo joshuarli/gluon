@@ -174,8 +174,19 @@ impl DepsLog {
         log
     }
 
-    fn truncate_to(&self, _offset: u64) {
+    fn truncate_to(&mut self, offset: u64) {
+        let truncated = OpenOptions::new()
+            .write(true)
+            .open(&self.path)
+            .and_then(|f| f.set_len(offset))
+            .is_ok();
+        if truncated {
+            return;
+        }
         let _ = std::fs::remove_file(&self.path);
+        self.records.clear();
+        self.path_ids.clear();
+        self.paths.clear();
     }
 
     /// Append a deps record for `out`, emitting any new path records
@@ -396,15 +407,22 @@ mod tests {
             f.write_all(b"not enough payload").unwrap();
         }
 
-        // On corruption, the log file is discarded entirely (matches
-        // reference ninja's "bad header -> discard" behavior). The
-        // first load still returns the records parsed before the bad
-        // tail, but the file is unlinked so subsequent loads start
-        // from an empty log.
-        let _reloaded = DepsLog::load(&path);
-        assert!(!std::path::Path::new(&path).exists());
-        let fresh = DepsLog::load(&path);
-        assert!(fresh.records.is_empty());
+        let reloaded = DepsLog::load(&path);
+        assert!(std::path::Path::new(&path).exists());
+        assert_eq!(reloaded.records.len(), 2);
+        assert_eq!(reloaded.records["a.o"].deps, vec!["a.h".to_string()]);
+        assert_eq!(reloaded.records["b.o"].mtime_ns, 2);
+
+        let again = DepsLog::load(&path);
+        assert_eq!(again.records.len(), 2);
+
+        let mut log = DepsLog::load(&path);
+        log.record("c.o", 3, &["c.h".to_string()]).unwrap();
+        log.close();
+        let with_new = DepsLog::load(&path);
+        assert_eq!(with_new.records.len(), 3);
+        assert_eq!(with_new.records["a.o"].deps, vec!["a.h".to_string()]);
+        assert_eq!(with_new.records["c.o"].deps, vec!["c.h".to_string()]);
 
         std::fs::remove_file(&path).ok();
     }

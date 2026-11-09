@@ -27,14 +27,6 @@ Next: 14
 - **Fix with:** durable-state
 - **Effort:** M
 
-### GLU-5 · P2 · deps-log truncation deletes the file and keeps the parsed prefix
-- **Area:** state
-- **Where:** `crates/state/src/deps_log.rs:177`
-- **Problem:** `truncate_to` ignores the good offset and deletes the whole file. The in-memory path ids from the parsed prefix stay. A later `record` can append dependency ids that have no path records in the new file.
-- **Recommendation:** Truncate the file at the good offset, or drop the in-memory prefix when the file is removed.
-- **Fix with:** durable-state
-- **Effort:** S
-
 ### GLU-6 · P2 · meson test succeeds when the build or the runner fails
 - **Area:** meson
 - **Where:** `crates/meson/src/cli.rs:900`, `crates/meson/src/cli.rs:911`, `crates/meson/src/cli.rs:932`
