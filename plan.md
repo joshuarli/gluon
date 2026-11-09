@@ -11,9 +11,9 @@ Meson/Ninja dependency subset.
 - Goal: land `meson` + `ninja` + `build` in this repo; correctness parity
   against pinned Meson/Ninja baselines, qualification on `~/d/play`, then
   measured optimization.
-- Last accepted revision: `58b59bc init` (contains only `plan.md`).
-- Accepted: none. Red: none. Parked: none.
-- Next slice: **G0 (ground)** — pins, toolchain check, libplacebo probe.
+- Last accepted revision: `0b51e40 docs(plan): make campaign executable unattended on this host`.
+- Accepted: G0 (ground). Red: none. Parked: none.
+- Next slice: **S1 (import)** — vendor oxidized sources into workspace layout.
 - Resume prompt: `run the next slice per plan.md; first command: git log --oneline -3 && git status --short`.
 
 ## Charter
