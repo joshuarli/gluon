@@ -11,14 +11,6 @@ Next: 14
 - **Fix with:** single-source-of-truth
 - **Effort:** M
 
-### GLU-6 · P2 · meson test succeeds when the build or the runner fails
-- **Area:** meson
-- **Where:** `crates/meson/src/cli.rs:900`, `crates/meson/src/cli.rs:911`, `crates/meson/src/cli.rs:932`
-- **Problem:** A failing `meson-test-prereq` compile is ignored. A missing or unreadable `intro-tests.json` becomes `No tests defined.` and exit 0. A spawn error prints a note and returns 0.
-- **Recommendation:** Propagate the compile status, and return non-zero when the test list cannot be read or ninja cannot be started.
-- **Fix with:** error-model
-- **Effort:** S
-
 ### GLU-7 · P2 · release zips omit the license texts
 - **Area:** release
 - **Where:** `.github/workflows/release.yml:151`

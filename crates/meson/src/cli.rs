@@ -898,14 +898,25 @@ impl Cli {
                 clean: false,
             });
             if compile_result != 0 {
-                // Ignore build failure for prereq — tests may still run
+                return compile_result;
             }
         }
 
-        // Read test definitions from introspection
         let tests_file = format!("{}/meson-info/intro-tests.json", args.build_dir);
-        let tests_json = std::fs::read_to_string(&tests_file).unwrap_or_else(|_| "[]".to_string());
-        let tests: Vec<deser_value::Value> = deser_json::from_str(&tests_json).unwrap_or_default();
+        let tests_json = match std::fs::read_to_string(&tests_file) {
+            Ok(text) => text,
+            Err(e) => {
+                eprintln!("Cannot read {tests_file}: {e}");
+                return 1;
+            }
+        };
+        let tests: Vec<deser_value::Value> = match deser_json::from_str(&tests_json) {
+            Ok(tests) => tests,
+            Err(e) => {
+                eprintln!("Cannot read {tests_file}: {e}");
+                return 1;
+            }
+        };
 
         if tests.is_empty() {
             eprintln!("No tests defined.");
@@ -929,9 +940,9 @@ impl Cli {
                     1
                 }
             }
-            Err(_) => {
-                eprintln!("Note: Run tests manually in the build directory");
-                0
+            Err(e) => {
+                eprintln!("Failed to run ninja: {e}");
+                1
             }
         }
     }
@@ -1259,6 +1270,101 @@ impl Cli {
         println!("  rewrite     Modify project definition");
         println!("  env2mfile   Convert env to machine file");
         println!("  --version   Print version");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_cli(build_dir: &str, no_rebuild: bool) -> Cli {
+        let mut args = vec![
+            "meson".to_string(),
+            "test".to_string(),
+            "-C".to_string(),
+            build_dir.to_string(),
+        ];
+        if no_rebuild {
+            args.push("--no-rebuild".to_string());
+        }
+        Cli::parse_args_from(args)
+    }
+
+    fn temp_build(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "meson-test-status-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn missing_test_list_fails() {
+        let dir = temp_build("missing");
+        let code = test_cli(dir.to_str().unwrap(), true).run();
+        assert_ne!(code, 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unreadable_test_list_fails() {
+        let dir = temp_build("badjson");
+        std::fs::create_dir_all(dir.join("meson-info")).unwrap();
+        std::fs::write(dir.join("meson-info/intro-tests.json"), "{").unwrap();
+        let code = test_cli(dir.to_str().unwrap(), true).run();
+        assert_ne!(code, 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn empty_test_list_succeeds() {
+        let dir = temp_build("empty");
+        std::fs::create_dir_all(dir.join("meson-info")).unwrap();
+        std::fs::write(dir.join("meson-info/intro-tests.json"), "[]").unwrap();
+        let code = test_cli(dir.to_str().unwrap(), true).run();
+        assert_eq!(code, 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn prereq_build_failure_fails_the_test_command() {
+        let dir = temp_build("prereq");
+        let code = test_cli(dir.to_str().unwrap(), false).run();
+        assert_ne!(code, 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ninja_spawn_failure_fails() {
+        let dir = temp_build("spawn");
+        std::fs::create_dir_all(dir.join("meson-info")).unwrap();
+        std::fs::write(dir.join("meson-info/intro-tests.json"), "[{\"name\":\"t\"}]").unwrap();
+        let old = std::env::var_os("PATH");
+        struct RestorePath(Option<std::ffi::OsString>);
+        impl Drop for RestorePath {
+            fn drop(&mut self) {
+                // SAFETY: restores the PATH this test replaced.
+                unsafe {
+                    match self.0.take() {
+                        Some(path) => std::env::set_var("PATH", path),
+                        None => std::env::remove_var("PATH"),
+                    }
+                }
+            }
+        }
+        let _restore = RestorePath(old);
+        // SAFETY: restored by RestorePath, including on panic.
+        unsafe {
+            std::env::set_var("PATH", "");
+        }
+        let code = test_cli(dir.to_str().unwrap(), true).run();
+        assert_ne!(code, 0);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
 
