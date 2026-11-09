@@ -504,7 +504,13 @@ impl<'a> Parser<'a> {
         // Expand paths against file-scope bindings.
         let expand_all = |v: Vec<String>| {
             v.into_iter()
-                .map(|s| expand_simple(&s, &scope.bindings, None, None))
+                .map(|s| {
+                    if s.as_bytes().contains(&b'$') {
+                        expand_simple(&s, &scope.bindings, None, None)
+                    } else {
+                        s
+                    }
+                })
                 .collect()
         };
         // \`dyndep = ...\` may live on the edge OR be inherited from
@@ -641,4 +647,29 @@ pub fn expand<F: Fn(&str) -> Option<String>>(s: &str, lookup: &F) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_build_paths_round_trip() {
+        let src = "rule cc\n  command = cc\nbuild foo.o: cc foo.c\n";
+        let state = parse(src).unwrap();
+        assert_eq!(state.edges[0].outputs, vec!["foo.o".to_string()]);
+        assert_eq!(state.edges[0].inputs, vec!["foo.c".to_string()]);
+        assert_eq!(state.producers.get("foo.o"), Some(&0));
+    }
+
+    #[test]
+    fn build_paths_expand_file_scope_and_escaped_space() {
+        let src = "rule cc\n  command = cc\nname = foo\nbuild $name.o: cc $name.c foo$ bar.c\n";
+        let state = parse(src).unwrap();
+        assert_eq!(state.edges[0].outputs, vec!["foo.o".to_string()]);
+        assert_eq!(
+            state.edges[0].inputs,
+            vec!["foo.c".to_string(), "foo bar.c".to_string()]
+        );
+    }
 }
