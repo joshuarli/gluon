@@ -11,9 +11,9 @@ CMake-less Meson dependency closure.
 - Goal: land `meson` + `ninja` + `build` in this repo; correctness parity
   against pinned Meson/Ninja baselines, qualification on `~/d/play`, then
   measured optimization.
-- Last accepted revision: `76cba7e docs(plan): record S7 accepted`.
-- Accepted: G0 (ground), S1 (import), S2 (harness + probe), S3 (refresh), S4 (harden frontend), S5 (harden executor), S6 (qualify), S7 (unify), S8 (optimize). Red: none. Parked: none.
-- Next slice: **Close** — dead-code removal, adversarial review, P1/P2 fixes, perf budget, final report.
+- Last accepted revision: `ecf6222 feat(engine): add S8 optimizations and benchmark corpus`.
+- Accepted: G0 (ground), S1 (import), S2 (harness + probe), S3 (refresh), S4 (harden frontend), S5 (harden executor), S6 (qualify), S7 (unify), S8 (optimize), Close. Red: none. Parked: none.
+- Next slice: **—** (campaign complete).
 - Resume prompt: `run the next slice per plan.md; first command: git log --oneline -3 && git status --short`.
 
 ## Charter
@@ -267,3 +267,40 @@ only); a CMake frontend; network features; Windows as a design driver.
 - Prior-art verdicts (kept, verified only where noted): n2 (architecture),
   Android fork (parser optimization), Orphis/ninja-rs (correctness
   reference).
+
+## Close report (2026-11-09)
+
+- Accepted: G0 (ground), S1 (import), S2 (harness + probe), S3 (refresh),
+  S4 (harden frontend), S5 (harden executor), S6 (qualify), S7 (unify),
+  S8 (optimize). Parked: none. Red: none.
+- Review: adversarial review (review skill) found P1 duplication (state logs
+  duplicated in ninja), P1 gluon-build meson stub, P2 benchmarks RSS
+  aggregation, P2 equivalence coverage (trivial-only), P2 engine->ninja
+  inversion (documented debt). Fixed P1 duplication (deleted 904 lines,
+  single owner in crates/state), fixed meson forwarding via
+  `parse_args_from`, fixed RSS per-run via /usr/bin/time -l. Engine->ninja
+  reuse and trivial-only equivalence retained as debt (no user-visible
+  behavior change; full graph snapshot and queue scheduling remain S8
+  scaffolding).
+- Dead code: removed duplicated ninja logs (state is owner), removed empty
+  skeleton in benchmarks gen_graph `true` rule artifacts. No other dead
+  crates (graph/state/engine are used by bins).
+- Verification (pushed main): `cargo build --release` green; `cargo test
+  --workspace` green (graph 3, engine 1, meson 7, ninja 19, state 13);
+  `tests/differential/run.sh` PASS empty ledger (14 fixtures);
+  `tests/upstream/musl.sh` PASS (rust:1.98 linux/amd64, meson 1.7.0,
+  ninja 1.13.2 in container); S6 play fixture: libplacebo 72-edge and
+  SPIRV-Cross built with gluon meson+ninja, `player-output` links via
+  nightly-2026-09-15 with CARGO_TARGET_DIR under .work/tmp.
+- Perf budget (gate ready, CPU/wall medians from S8 corpus interleaved):
+  meson cold setup ref ~0.62s vs gluon ~0.05s (12x faster, Rust vs Python);
+  ninja 100K dry-run ref ~0.34s vs gluon ~0.12s (faster). Both meet "no
+  slower beyond spread". Second benchmark invocation deferred (host busy,
+  load >0.7/core, fseventsd) and discarded per Charter; not counted.
+- Deltas: workspace cold release build ~15-19s (incremental ~5s); binaries
+  meson 1.5M, ninja 605K (release, strip+LTO).
+- Deferred: Muon canonical check (SourceHut unreachable, informational per
+  P-3), Windows compatibility (intentionally deferred per Needs environment).
+  Full graph snapshot persistence validated as scaffolding (conservative
+  invalidation, not yet on the execution path); queue scheduler and
+  interner are tested helpers not yet wired into the main dispatch loop.
