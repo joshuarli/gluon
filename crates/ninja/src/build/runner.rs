@@ -28,13 +28,40 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::SystemTime;
 
+pub struct RunReport {
+    pub code: u8,
+    /// True when at least one real (non-phony) edge was dispatched. Used
+    /// by the manifest-regeneration pass to decide whether the manifest
+    /// must be reloaded before the main build.
+    pub ran: bool,
+}
+
 pub fn run(state: &State, opts: &Options) -> Result<u8, String> {
-    let targets = resolve_targets(state, opts);
+    Ok(run_targets(state, opts, None, true)?.code)
+}
+
+/// Run `targets_override` (or the normal resolved targets when `None`).
+/// `announce_no_work` suppresses the trailing "no work to do" line for
+/// the manifest-regeneration pass, which must stay silent when the
+/// manifest is already up to date.
+pub fn run_targets(
+    state: &State,
+    opts: &Options,
+    targets_override: Option<&[String]>,
+    announce_no_work: bool,
+) -> Result<RunReport, String> {
+    let targets = match targets_override {
+        Some(t) => t.to_vec(),
+        None => resolve_targets(state, opts),
+    };
     if targets.is_empty() {
-        if !opts.quiet {
+        if !opts.quiet && announce_no_work {
             println!("ninja: no work to do.");
         }
-        return Ok(0);
+        return Ok(RunReport {
+            code: 0,
+            ran: false,
+        });
     }
     // Surface unknown explicit targets the way ninja does — an error to
     // stdout, exit 1. Source files (no producer) are accepted only when
@@ -48,28 +75,31 @@ pub fn run(state: &State, opts: &Options) -> Result<u8, String> {
             });
             if !known {
                 println!("ninja: error: unknown target '{t}'");
-                return Ok(1);
+                return Ok(RunReport { code: 1, ran: false });
             }
         }
     }
 
     let plan = build_plan(state, &targets)?;
     if plan.is_empty() {
-        if !opts.quiet {
+        if !opts.quiet && announce_no_work {
             println!("ninja: no work to do.");
         }
-        return Ok(0);
+        return Ok(RunReport {
+            code: 0,
+            ran: false,
+        });
     }
 
     let real_count = plan.iter().filter(|&&i| !state.edges[i].is_phony()).count();
     let mode = Mode::detect();
     let mut status = Status::new(mode, opts.quiet, opts.verbose, real_count);
-    let result = schedule(state, opts, &plan, &mut status)?;
+    let (result, ran) = schedule(state, opts, &plan, &mut status, announce_no_work)?;
     if result == 0 && real_count == 0 && !opts.quiet {
         // All edges in the plan turned out to be phony — preserve the
         // legacy "no work to do" message.
     }
-    Ok(result)
+    Ok(RunReport { code: result, ran })
 }
 
 /// Dependency-driven scheduler. Walks the topologically-ordered plan and
@@ -80,7 +110,8 @@ fn schedule(
     opts: &Options,
     plan: &[usize],
     status: &mut Status,
-) -> Result<u8, String> {
+    announce_no_work: bool,
+) -> Result<(u8, bool), String> {
     let jobs = opts.jobs_count().max(1);
     let explain = opts.explain();
 
@@ -730,25 +761,25 @@ fn schedule(
     status.finish();
     if interrupted {
         println!("ninja: build stopped: interrupted by user.");
-        return Ok(130);
+        return Ok((130, any_real_work));
     }
     if let Some(msg) = dyndep_failure {
         // Match upstream wording exactly:
         //   ninja: build stopped: multiple rules generate X.
         eprintln!("ninja: build stopped: {msg}.");
-        return Ok(1);
+        return Ok((1, any_real_work));
     }
     if let Some(code) = hard_failure {
         eprintln!("ninja: build stopped: subcommand failed.");
-        return Ok(code);
+        return Ok((code, any_real_work));
     }
-    if !any_real_work && !opts.quiet {
+    if !any_real_work && !opts.quiet && announce_no_work {
         // Every edge in the plan was either phony or skipped because
         // its outputs were already up to date — match reference ninja
         // and tell the user there's nothing to do.
         println!("ninja: no work to do.");
     }
-    Ok(0)
+    Ok((0, any_real_work))
 }
 
 /// Decide whether the edge still needs to run *right now*. An edge

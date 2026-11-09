@@ -11,10 +11,59 @@
 use crate::graph::{Edge, Rule, State};
 use std::collections::HashMap;
 
+/// Visible names in one manifest scope. `include` extends the enclosing
+/// scope in place; `subninja` parses into a child scope that inherits a
+/// copy, so its rules and variables never leak back to the includer.
+///
+/// Rule definitions are always stored in `State::rules` under a
+/// qualified key: the bare name at top level, or `name@<scope>` inside a
+/// subninja. Edges are rewritten to that key while parsing, which keeps
+/// lookup at build time a plain map hit while making a subninja rule
+/// invisible to its parent.
+struct Scope {
+    rules: HashMap<String, String>,
+    bindings: HashMap<String, String>,
+    qualifier: Option<String>,
+}
+
+impl Scope {
+    fn top_level() -> Self {
+        Self {
+            rules: HashMap::new(),
+            bindings: HashMap::new(),
+            qualifier: None,
+        }
+    }
+
+    fn child(&self, id: usize) -> Self {
+        Self {
+            rules: self.rules.clone(),
+            bindings: self.bindings.clone(),
+            qualifier: Some(id.to_string()),
+        }
+    }
+
+    fn rule_key(&self, name: &str) -> String {
+        match &self.qualifier {
+            Some(q) => format!("{name}@{q}"),
+            None => name.to_string(),
+        }
+    }
+}
+
 #[allow(dead_code)]
 pub fn parse(src: &str) -> Result<State, String> {
     let mut state = State::default();
-    parse_into(&mut state, src, std::path::Path::new("."))?;
+    let mut scope = Scope::top_level();
+    let mut next_scope = 0;
+    parse_into(
+        &mut state,
+        &mut scope,
+        src,
+        std::path::Path::new("."),
+        &mut next_scope,
+    )?;
+    state.bindings = scope.bindings;
     Ok(state)
 }
 
@@ -27,15 +76,23 @@ pub fn parse_file(path: &str) -> Result<State, String> {
     let p = std::path::Path::new(path);
     let base = p.parent().unwrap_or_else(|| std::path::Path::new("."));
     let src = std::fs::read_to_string(path).map_err(|e| format!("loading '{path}': {e}"))?;
-    parse_into(&mut state, &src, base)?;
+    let mut scope = Scope::top_level();
+    let mut next_scope = 0;
+    parse_into(&mut state, &mut scope, &src, base, &mut next_scope)?;
+    state.bindings = scope.bindings;
     Ok(state)
 }
 
 /// Parse `src` (the contents of a manifest file located in `base_dir`)
-/// into the existing `state`. Splits out from `parse` so that
-/// `include` / `subninja` can recurse with the same accumulator and a
-/// new `base_dir`.
-fn parse_into(state: &mut State, src: &str, base_dir: &std::path::Path) -> Result<(), String> {
+/// into the existing `state` and `scope`. Splits out from `parse` so that
+/// `include` / `subninja` can recurse with a new `base_dir`.
+fn parse_into(
+    state: &mut State,
+    scope: &mut Scope,
+    src: &str,
+    base_dir: &std::path::Path,
+    next_scope: &mut usize,
+) -> Result<(), String> {
     let mut p = Parser::new(src);
     while !p.eof() {
         p.skip_blank_and_comments();
@@ -47,10 +104,14 @@ fn parse_into(state: &mut State, src: &str, base_dir: &std::path::Path) -> Resul
         match word.as_str() {
             "rule" => {
                 let r = p.parse_rule().map_err(|e| with_line(line_no, &e))?;
-                state.rules.insert(r.name.clone(), r);
+                let key = scope.rule_key(&r.name);
+                scope.rules.insert(r.name.clone(), key.clone());
+                state.rules.insert(key, r);
             }
             "build" => {
-                let edge = p.parse_build(&*state).map_err(|e| with_line(line_no, &e))?;
+                let edge = p
+                    .parse_build(&*state, scope)
+                    .map_err(|e| with_line(line_no, &e))?;
                 let idx = state.edges.len();
                 for o in &edge.outputs {
                     state.producers.insert(o.clone(), idx);
@@ -63,7 +124,7 @@ fn parse_into(state: &mut State, src: &str, base_dir: &std::path::Path) -> Resul
             "default" => {
                 let mut targets = Vec::new();
                 while let Some(t) = p.next_path()? {
-                    targets.push(expand_simple(&t, &state.bindings, None, None));
+                    targets.push(expand_simple(&t, &scope.bindings, None, None));
                 }
                 p.expect_newline()?;
                 state.defaults.extend(targets);
@@ -88,7 +149,7 @@ fn parse_into(state: &mut State, src: &str, base_dir: &std::path::Path) -> Resul
                     }
                     p.bump();
                     let raw = p.read_value();
-                    let value = expand_simple(raw.trim(), &state.bindings, None, None);
+                    let value = expand_simple(raw.trim(), &scope.bindings, None, None);
                     if key == "depth" {
                         depth = value.parse().ok();
                     }
@@ -106,7 +167,7 @@ fn parse_into(state: &mut State, src: &str, base_dir: &std::path::Path) -> Resul
                 // `build.ninja` in `build/` must read
                 // `build/CMakeFiles/rules.ninja`).
                 let raw = p.read_value();
-                let path_str = expand_simple(raw.trim(), &state.bindings, None, None);
+                let path_str = expand_simple(raw.trim(), &scope.bindings, None, None);
                 let nested_path = base_dir.join(&path_str);
                 let nested_base = nested_path
                     .parent()
@@ -115,7 +176,18 @@ fn parse_into(state: &mut State, src: &str, base_dir: &std::path::Path) -> Resul
                 let nested_src = std::fs::read_to_string(&nested_path).map_err(|e| {
                     with_line(line_no, &format!("{kw} '{}' - {e}", nested_path.display()))
                 })?;
-                parse_into(state, &nested_src, &nested_base)?;
+                if kw == "include" {
+                    // `include` extends the current scope in place: rules
+                    // and variables it declares stay visible here.
+                    parse_into(state, scope, &nested_src, &nested_base, next_scope)?;
+                } else {
+                    // `subninja` opens a child scope that inherits the
+                    // current one. Definitions made inside stay in the
+                    // child; the parent scope is left untouched.
+                    let mut child = scope.child(*next_scope);
+                    *next_scope += 1;
+                    parse_into(state, &mut child, &nested_src, &nested_base, next_scope)?;
+                }
             }
             "" => {
                 // Stray blank line after skip_blank_and_comments shouldn't happen.
@@ -127,8 +199,8 @@ fn parse_into(state: &mut State, src: &str, base_dir: &std::path::Path) -> Resul
                 if p.peek() == Some('=') {
                     p.bump();
                     let value = p.read_value();
-                    let expanded = expand_simple(&value, &state.bindings, None, None);
-                    state.bindings.insert(other.to_string(), expanded);
+                    let expanded = expand_simple(&value, &scope.bindings, None, None);
+                    scope.bindings.insert(other.to_string(), expanded);
                 } else {
                     return Err(with_line(
                         line_no,
@@ -331,7 +403,7 @@ impl<'a> Parser<'a> {
         Ok(Rule { name, bindings })
     }
 
-    fn parse_build(&mut self, state: &State) -> Result<Edge, String> {
+    fn parse_build(&mut self, state: &State, scope: &Scope) -> Result<Edge, String> {
         let mut outputs = Vec::new();
         let mut implicit_outputs = Vec::new();
         let mut implicit = false;
@@ -356,6 +428,19 @@ impl<'a> Parser<'a> {
         if rule.is_empty() {
             return Err("expected rule name in build".into());
         }
+        // Resolve the rule in the current scope. Rules declared in a
+        // subninja are stored under a qualified key and are not in the
+        // parent's visible set, so referencing one here is an error —
+        // exactly like reference ninja's "unknown build rule".
+        let rule_key = if rule == "phony" {
+            rule.clone()
+        } else {
+            scope
+                .rules
+                .get(&rule)
+                .cloned()
+                .ok_or_else(|| format!("unknown build rule '{rule}'"))?
+        };
         let mut inputs = Vec::new();
         while let Some(p) = self.next_path()? {
             inputs.push(p);
@@ -400,14 +485,14 @@ impl<'a> Parser<'a> {
         // Expand paths against file-scope bindings.
         let expand_all = |v: Vec<String>| {
             v.into_iter()
-                .map(|s| expand_simple(&s, &state.bindings, None, None))
+                .map(|s| expand_simple(&s, &scope.bindings, None, None))
                 .collect()
         };
         // \`dyndep = ...\` may live on the edge OR be inherited from
         // the rule (the test_issue_2621 plan declares it on the rule).
         // Resolve via the standard layered lookup so per-edge bindings
         // shadow rule bindings.
-        let rule_obj = state.rules.get(&rule);
+        let rule_obj = state.rules.get(&rule_key);
         let dyndep_raw = bindings
             .get("dyndep")
             .cloned()
@@ -415,13 +500,13 @@ impl<'a> Parser<'a> {
         let dyndep = dyndep_raw.map(|s| {
             expand_simple(
                 &s,
-                &state.bindings,
+                &scope.bindings,
                 Some(&bindings),
                 rule_obj.map(|r| &r.bindings),
             )
         });
         Ok(Edge {
-            rule,
+            rule: rule_key,
             outputs: expand_all(outputs),
             implicit_outputs: expand_all(implicit_outputs),
             inputs: expand_all(inputs),

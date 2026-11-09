@@ -1,2 +1,0 @@
-ninja/regeneration : candidate builds a.o after regenerating build.ninja; reference stops with no work
-ninja/subninja : candidate allows rule from subninja scope; reference reports unknown build rule
