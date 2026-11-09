@@ -3661,6 +3661,7 @@ fn builtin_get_option(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
         "c_std" | "cpp_std" => Ok(Object::String("none".to_string())),
         "cpp_eh" => Ok(Object::String("default".to_string())),
         "cpp_rtti" => Ok(Object::Bool(true)),
+        "prefer_static" => Ok(Object::Bool(false)),
         _ => {
             // For unknown options in subprojects, check if auto_features applies
             if let Some(auto_feat) = vm.options.get("auto_features") {

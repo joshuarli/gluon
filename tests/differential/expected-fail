@@ -1,5 +1,2 @@
-meson/libplacebo-feature-not : get_option('prefer_static') is Feature not Bool; not prefer_static rejected (libplacebo glsl)
-meson/libplacebo-multiline-plus : multiline '+' in warning() rejected by parser (libplacebo warning style)
-meson/multiline-plus : multiline '+' in warning() rejected by parser
 ninja/regeneration : candidate builds a.o after regenerating build.ninja; reference stops with no work
 ninja/subninja : candidate allows rule from subninja scope; reference reports unknown build rule

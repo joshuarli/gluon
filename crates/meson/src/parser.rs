@@ -515,6 +515,7 @@ impl Parser {
 
     fn parse_argument_list(&mut self) -> Result<Vec<Argument>, String> {
         self.expect_kind(&TokenKind::LParen)?;
+        self.paren_depth += 1;
         let mut args = Vec::new();
         self.skip_newlines();
         if !self.check(&TokenKind::RParen) {
@@ -531,6 +532,7 @@ impl Parser {
             }
         }
         self.skip_newlines();
+        self.paren_depth -= 1;
         self.expect_kind(&TokenKind::RParen)?;
         Ok(args)
     }
