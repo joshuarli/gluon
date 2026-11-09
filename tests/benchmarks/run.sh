@@ -4,7 +4,7 @@
 # Each reports CPU time, wall time, peak RSS; separate build dirs per
 # runner; caches/daemons off; interleaved baseline/candidate; median.
 # Gate: time-based timings run only when perf-gate-ready exits 0, and
-# again with -1 right after (plan.md Charter). Deferred prints a message
+# again with -1 right after (docs/testing.md). Deferred prints a message
 # and exits non-zero; it never counts as a pass.
 set -u
 
