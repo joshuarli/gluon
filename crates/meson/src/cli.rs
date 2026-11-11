@@ -712,6 +712,17 @@ impl Cli {
         // Set up interpreter
         let mut interp = Interpreter::new(&source_dir, &build_dir);
 
+        if args.cross_file.is_none() {
+            for (key, values) in options::env_flag_options(|name| std::env::var(name).ok()) {
+                interp.vm.options.insert(
+                    key,
+                    crate::objects::Object::Array(
+                        values.into_iter().map(crate::objects::Object::String).collect(),
+                    ),
+                );
+            }
+        }
+
         // Load cross/native files
         if let Some(ref cross) = args.cross_file {
             let machine_config = options::parse_machine_file(cross);

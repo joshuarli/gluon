@@ -466,6 +466,10 @@ impl NinjaBackend {
                 if let Some(global_args) = build_data.global_link_args.get(link_language) {
                     link_args.extend(global_args.iter().cloned());
                 }
+                link_args.extend(option_string_array(
+                    options,
+                    &format!("{}_link_args", link_language),
+                ));
                 link_args.extend(target.link_args.iter().cloned());
 
                 // Link with other targets
@@ -591,6 +595,10 @@ impl NinjaBackend {
                 if let Some(global_args) = build_data.global_link_args.get(link_language) {
                     link_args.extend(global_args.iter().cloned());
                 }
+                link_args.extend(option_string_array(
+                    options,
+                    &format!("{}_link_args", link_language),
+                ));
                 link_args.extend(target.link_args.iter().cloned());
 
                 let pic_arg = if target.pic.unwrap_or(true) {

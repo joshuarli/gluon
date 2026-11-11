@@ -178,6 +178,93 @@ pub fn effective_debug(options: &HashMap<String, Object>) -> bool {
     true
 }
 
+pub fn split_shell_args(value: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_arg = false;
+    let mut chars = value.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => {
+                in_arg = true;
+                for q in chars.by_ref() {
+                    if q == '\'' {
+                        break;
+                    }
+                    current.push(q);
+                }
+            }
+            '"' => {
+                in_arg = true;
+                while let Some(q) = chars.next() {
+                    match q {
+                        '"' => break,
+                        '\\' => match chars.next() {
+                            Some(e @ ('"' | '\\' | '$' | '`')) => current.push(e),
+                            Some('\n') => {}
+                            Some(e) => {
+                                current.push('\\');
+                                current.push(e);
+                            }
+                            None => current.push('\\'),
+                        },
+                        other => current.push(other),
+                    }
+                }
+            }
+            '\\' => {
+                in_arg = true;
+                match chars.next() {
+                    Some('\n') => {}
+                    Some(e) => current.push(e),
+                    None => {}
+                }
+            }
+            c if c.is_whitespace() => {
+                if in_arg {
+                    args.push(std::mem::take(&mut current));
+                    in_arg = false;
+                }
+            }
+            other => {
+                in_arg = true;
+                current.push(other);
+            }
+        }
+    }
+    if in_arg {
+        args.push(current);
+    }
+    args
+}
+
+/// Compiler and linker options Meson seeds from CPPFLAGS, CFLAGS, CXXFLAGS,
+/// OBJCFLAGS, OBJCXXFLAGS, and LDFLAGS for a native build.
+pub fn env_flag_options(env: impl Fn(&str) -> Option<String>) -> Vec<(String, Vec<String>)> {
+    const LANGUAGES: &[(&str, &str)] = &[
+        ("c", "CFLAGS"),
+        ("cpp", "CXXFLAGS"),
+        ("objc", "OBJCFLAGS"),
+        ("objcpp", "OBJCXXFLAGS"),
+    ];
+    let split = |name: &str| env(name).map(|value| split_shell_args(&value));
+    let cppflags = split("CPPFLAGS");
+    let ldflags = split("LDFLAGS");
+    let mut options = Vec::new();
+    for (lang, var) in LANGUAGES {
+        let langflags = split(var);
+        if cppflags.is_some() || langflags.is_some() {
+            let mut args = cppflags.clone().unwrap_or_default();
+            args.extend(langflags.unwrap_or_default());
+            options.push((format!("{}_args", lang), args));
+        }
+        if let Some(ldflags) = &ldflags {
+            options.push((format!("{}_link_args", lang), ldflags.clone()));
+        }
+    }
+    options
+}
+
 /// Parse a value string into an Object
 pub fn parse_option_value(value: &str) -> Object {
     match value {
@@ -619,4 +706,35 @@ pub fn parse_machine_file(path: &str) -> HashMap<String, HashMap<String, String>
     }
 
     sections
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_shell_args_follows_posix_quoting() {
+        assert_eq!(
+            split_shell_args(r#"-O2  -DA="b c" '-DD=$e' -DF=g\ h"#),
+            vec!["-O2", "-DA=b c", "-DD=$e", "-DF=g h"]
+        );
+        assert_eq!(split_shell_args("  "), Vec::<String>::new());
+        assert_eq!(split_shell_args("''"), vec![""]);
+    }
+
+    #[test]
+    fn env_flag_options_prepends_cppflags_and_shares_ldflags() {
+        let env = |name: &str| match name {
+            "CPPFLAGS" => Some("-DX".to_string()),
+            "CFLAGS" => Some("-O2 -ffile-prefix-map=/w=.".to_string()),
+            "LDFLAGS" => Some("-Wl,-z,now".to_string()),
+            _ => None,
+        };
+        let options: HashMap<_, _> = env_flag_options(env).into_iter().collect();
+        assert_eq!(options["c_args"], vec!["-DX", "-O2", "-ffile-prefix-map=/w=."]);
+        assert_eq!(options["cpp_args"], vec!["-DX"]);
+        assert_eq!(options["c_link_args"], vec!["-Wl,-z,now"]);
+        assert_eq!(options["objcpp_link_args"], vec!["-Wl,-z,now"]);
+        assert!(env_flag_options(|_| None).is_empty());
+    }
 }

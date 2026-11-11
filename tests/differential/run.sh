@@ -99,17 +99,17 @@ run_compare_meson() {
       setup_args+=("$line")
     done <"$src/setup-args.txt"
   fi
-  if [ "${#setup_args[@]}" -eq 0 ]; then
-    meson setup "$ref_build" "$src_copy" >"$work/setup.log" 2>&1
-    ref_setup=$?
-    (cd "$cand_work" && "$GLUON_MESON" setup "$src_copy" >"$work/cand_setup.log" 2>&1)
-    cand_setup=$?
-  else
-    meson setup "$ref_build" "$src_copy" "${setup_args[@]}" >"$work/setup.log" 2>&1
-    ref_setup=$?
-    (cd "$cand_work" && "$GLUON_MESON" setup "$src_copy" "${setup_args[@]}" >"$work/cand_setup.log" 2>&1)
-    cand_setup=$?
+  setup_env=()
+  if [ -f "$src/setup-env.txt" ]; then
+    while IFS= read -r line; do
+      [ -z "$line" ] && continue
+      setup_env+=("$line")
+    done <"$src/setup-env.txt"
   fi
+  env ${setup_env[@]+"${setup_env[@]}"} meson setup "$ref_build" "$src_copy" ${setup_args[@]+"${setup_args[@]}"} >"$work/setup.log" 2>&1
+  ref_setup=$?
+  (cd "$cand_work" && env ${setup_env[@]+"${setup_env[@]}"} "$GLUON_MESON" setup "$src_copy" ${setup_args[@]+"${setup_args[@]}"} >"$work/cand_setup.log" 2>&1)
+  cand_setup=$?
   if [ "$ref_setup" != "$cand_setup" ]; then
     printf 'FAIL %s setup exit ref=%s cand=%s\n' "$id" "$ref_setup" "$cand_setup" >>"$TMPBASE/results.log"
     return 1
@@ -140,8 +140,8 @@ run_compare_meson() {
     return 0
   fi
   if [ -f "$src/expect-flags.txt" ]; then
-    grep -E '^[[:space:]]*ARGS = ' "$ref_build/build.ninja" >"$work/ref_args.txt" 2>/dev/null || true
-    grep -E '^[[:space:]]*ARGS = ' "$cand_build/build.ninja" >"$work/cand_args.txt" 2>/dev/null || true
+    grep -E '^[[:space:]]*(LINK_)?ARGS = ' "$ref_build/build.ninja" >"$work/ref_args.txt" 2>/dev/null || true
+    grep -E '^[[:space:]]*(LINK_)?ARGS = ' "$cand_build/build.ninja" >"$work/cand_args.txt" 2>/dev/null || true
     while IFS= read -r flag; do
       [ -z "$flag" ] && continue
       if ! grep -F -- "$flag" "$work/ref_args.txt" >/dev/null 2>&1; then
