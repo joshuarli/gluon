@@ -52,6 +52,7 @@ struct PcFields<'a> {
 
 struct DependenciesHelper<'a> {
     targets: &'a [BuildTarget],
+    metadata: &'a HashMap<String, (String, String)>,
     pub_libs: Vec<LibEntry>,
     pub_reqs: Vec<String>,
     priv_libs: Vec<LibEntry>,
@@ -62,9 +63,13 @@ struct DependenciesHelper<'a> {
 }
 
 impl<'a> DependenciesHelper<'a> {
-    fn new(targets: &'a [BuildTarget]) -> Self {
+    fn new(
+        targets: &'a [BuildTarget],
+        metadata: &'a HashMap<String, (String, String)>,
+    ) -> Self {
         Self {
             targets,
+            metadata,
             pub_libs: Vec::new(),
             pub_reqs: Vec::new(),
             priv_libs: Vec::new(),
@@ -78,6 +83,10 @@ impl<'a> DependenciesHelper<'a> {
     fn find_target(&self, id: &str) -> Option<&'a BuildTarget> {
         let targets = self.targets;
         targets.iter().find(|target| target.id == id)
+    }
+
+    fn metadata_filebase(&self, id: &str) -> Option<String> {
+        self.metadata.get(id).map(|(filebase, _)| filebase.clone())
     }
 
     fn add_pub_libs(&mut self, libs: &[Object]) {
@@ -129,12 +138,27 @@ impl<'a> DependenciesHelper<'a> {
                         processed.push(name);
                     }
                 }
+                Object::BuildTarget(target) => {
+                    if let Some(filebase) = self.metadata_filebase(&target.id) {
+                        processed.push(filebase);
+                    }
+                }
                 Object::Dependency(dep) => {
-                    if !dep.found || dep.name.is_empty() {
+                    if !dep.found {
                         continue;
                     }
-                    self.add_version_reqs(&dep.name, &dep.version_reqs);
-                    processed.push(dep.name.clone());
+                    if dep.kind == "pkgconfig" && !dep.name.is_empty() {
+                        self.add_version_reqs(&dep.name, &dep.version_reqs);
+                        processed.push(dep.name.clone());
+                    } else if dep.is_internal {
+                        for lib in &dep.link_with {
+                            if let Object::BuildTarget(target) = lib {
+                                if let Some(filebase) = self.metadata_filebase(&target.id) {
+                                    processed.push(filebase);
+                                }
+                            }
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -153,6 +177,10 @@ impl<'a> DependenciesHelper<'a> {
         for obj in flatten(libs) {
             match obj {
                 Object::BuildTarget(target_ref) => {
+                    if let Some(filebase) = self.metadata_filebase(&target_ref.id) {
+                        reqs.push(filebase);
+                        continue;
+                    }
                     if let Some(target) = self.find_target(&target_ref.id) {
                         processed.push(LibEntry::Target(target.id.clone()));
                         if target.target_type == TargetType::SharedLibrary
@@ -166,7 +194,10 @@ impl<'a> DependenciesHelper<'a> {
                     }
                 }
                 Object::Dependency(dep) => {
-                    if !dep.is_internal && dep.name == "threads" {
+                    if !dep.found {
+                        continue;
+                    }
+                    if dep.name == "valgrind" {
                         continue;
                     }
                     if dep.is_internal {
@@ -174,7 +205,12 @@ impl<'a> DependenciesHelper<'a> {
                             processed.push(LibEntry::Str(arg.clone()));
                         }
                         cflags.extend(dep.compile_args.iter().cloned());
-                        self.add_priv_libs(&dep.dependencies);
+                        self.add_internal_dependencies(
+                            dep.link_with.clone(),
+                            dep.link_whole.clone(),
+                            dep.dependencies.clone(),
+                            public,
+                        );
                     } else if dep.kind == "pkgconfig" && !dep.name.is_empty() {
                         self.add_version_reqs(&dep.name, &dep.version_reqs);
                         reqs.push(dep.name.clone());
@@ -193,9 +229,36 @@ impl<'a> DependenciesHelper<'a> {
     }
 
     fn add_lib_dependencies(&mut self, target: &'a BuildTarget, public: bool) {
-        let link_with = target.link_with.clone();
+        self.add_dependency_graph(
+            target.link_with.clone(),
+            target.link_whole.clone(),
+            target.dependencies.clone(),
+            public,
+            false,
+        );
+    }
+
+    fn add_internal_dependencies(
+        &mut self,
+        link_with: Vec<Object>,
+        link_whole: Vec<Object>,
+        dependencies: Vec<Object>,
+        public: bool,
+    ) {
+        self.add_dependency_graph(link_with, link_whole, dependencies, public, true);
+    }
+
+    fn add_dependency_graph(
+        &mut self,
+        link_with: Vec<Object>,
+        link_whole: Vec<Object>,
+        dependencies: Vec<Object>,
+        public: bool,
+        private_external_deps: bool,
+    ) {
         for lib in &link_with {
             let Object::BuildTarget(target_ref) = lib else {
+                self.add_libs(std::slice::from_ref(lib), public);
                 continue;
             };
             let Some(linked) = self.find_target(&target_ref.id) else {
@@ -204,28 +267,30 @@ impl<'a> DependenciesHelper<'a> {
             if linked.target_type == TargetType::StaticLibrary && !linked.install {
                 self.add_link_whole(linked, public);
             } else {
-                let single = [lib.clone()];
-                if public {
-                    self.add_pub_libs(&single);
-                } else {
-                    self.add_priv_libs(&single);
-                }
+                self.add_libs(std::slice::from_ref(lib), public);
             }
         }
-        let link_whole = target.link_whole.clone();
         for lib in &link_whole {
             let Object::BuildTarget(target_ref) = lib else {
+                self.add_libs(std::slice::from_ref(lib), public);
                 continue;
             };
             if let Some(linked) = self.find_target(&target_ref.id) {
                 self.add_link_whole(linked, public);
             }
         }
-        let dependencies = target.dependencies.clone();
-        if public {
-            self.add_pub_libs(&dependencies);
-        } else {
+        if private_external_deps || !public {
             self.add_priv_libs(&dependencies);
+        } else {
+            self.add_pub_libs(&dependencies);
+        }
+    }
+
+    fn add_libs(&mut self, libs: &[Object], public: bool) {
+        if public {
+            self.add_pub_libs(libs);
+        } else {
+            self.add_priv_libs(libs);
         }
     }
 
@@ -305,7 +370,6 @@ fn dedup_strings(values: &[String], libs: bool, exclude: &mut HashSet<String>) -
 
 fn dedup_libs(values: &[LibEntry], exclude: &mut HashSet<String>) -> Vec<LibEntry> {
     let mut result = Vec::new();
-    let mut string_seen = HashSet::new();
     for value in values {
         match value {
             LibEntry::Target(id) => {
@@ -317,7 +381,7 @@ fn dedup_libs(values: &[LibEntry], exclude: &mut HashSet<String>) -> Vec<LibEntr
             LibEntry::Str(text) => {
                 let cannot_dedup =
                     !text.starts_with("-l") && !text.starts_with("-L") && text != "-pthread";
-                if !cannot_dedup && !string_seen.insert(text.clone()) {
+                if !cannot_dedup && !exclude.insert(text.clone()) {
                     continue;
                 }
                 result.push(value.clone());
@@ -666,7 +730,7 @@ fn pkgconfig_generate(vm: &mut VM, _obj: &Object, args: &[CallArg]) -> Result<Ob
     let requires_private = argument_objects(args, "requires_private");
     let extra_cflags = VM::get_arg_string_array(args, "extra_cflags");
 
-    let mut deps = DependenciesHelper::new(&targets);
+    let mut deps = DependenciesHelper::new(&targets, &vm.build_data.pkgconfig_metadata);
     deps.add_pub_libs(&libraries);
     deps.add_priv_libs(&libraries_private);
     deps.add_pub_reqs(&requires);
@@ -820,6 +884,25 @@ fn pkgconfig_generate(vm: &mut VM, _obj: &Object, args: &[CallArg]) -> Result<Ob
         &uninstalled_libs_private,
         &uninstalled_cflags,
     );
+
+    let register_ids: Vec<String> = if let Some(target) = &mainlib {
+        vec![target.id.clone()]
+    } else {
+        deps.pub_libs
+            .iter()
+            .filter_map(|entry| match entry {
+                LibEntry::Target(id) => Some(id.clone()),
+                LibEntry::Str(_) => None,
+            })
+            .collect()
+    };
+    drop(deps);
+    for id in register_ids {
+        vm.build_data
+            .pkgconfig_metadata
+            .entry(id)
+            .or_insert_with(|| (filebase.clone(), name.clone()));
+    }
     let uninstalled_dir = Path::new(&vm.build_root).join("meson-uninstalled");
     std::fs::create_dir_all(&uninstalled_dir)
         .map_err(|e| format!("Cannot create pkgconfig directory: {}", e))?;

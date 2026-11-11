@@ -700,10 +700,8 @@ fn build_target_common(
         collect_sources(arg, &vm.source_root, &mut sources);
     }
     // Also collect from 'sources' kwarg
-    if let Some(Object::Array(arr)) = VM::get_arg_value(args, "sources") {
-        for s in arr {
-            collect_sources(s, &vm.source_root, &mut sources);
-        }
+    if let Some(value) = VM::get_arg_value(args, "sources") {
+        collect_sources(&value, &vm.source_root, &mut sources);
     }
 
     let mut dependencies = Vec::new();
@@ -1092,6 +1090,16 @@ fn target_include_dirs(vm: &VM, value: Option<&Object>) -> Result<Vec<String>, S
     Ok(dirs)
 }
 
+fn is_compilable_source(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    lower.ends_with(".c")
+        || lower.ends_with(".cc")
+        || lower.ends_with(".cpp")
+        || lower.ends_with(".cxx")
+        || lower.ends_with(".m")
+        || lower.ends_with(".mm")
+}
+
 fn collect_sources(obj: &Object, source_root: &str, sources: &mut Vec<String>) {
     match obj {
         Object::String(s) => sources.push(s.clone()),
@@ -1130,7 +1138,11 @@ fn collect_sources(obj: &Object, source_root: &str, sources: &mut Vec<String>) {
         }
         Object::GeneratedList(data) => {
             for out in &data.outputs {
-                sources.push(format!("<genout:{}>", out));
+                if is_compilable_source(out) {
+                    sources.push(format!("<genout:{}>", out));
+                } else {
+                    sources.push(format!("<orderonly:{}>", out));
+                }
             }
             if data.outputs.is_empty() {
                 sources.push(format!("<generated:{}>", obj.to_display_string()));
@@ -1143,14 +1155,7 @@ fn collect_sources(obj: &Object, source_root: &str, sources: &mut Vec<String>) {
                 format!("{}/", r.subdir)
             };
             for o in &r.outputs {
-                let lower = o.to_lowercase();
-                if lower.ends_with(".c")
-                    || lower.ends_with(".cc")
-                    || lower.ends_with(".cpp")
-                    || lower.ends_with(".cxx")
-                    || lower.ends_with(".m")
-                    || lower.ends_with(".mm")
-                {
+                if is_compilable_source(o) {
                     sources.push(format!("<genout:{}{}>", d, o));
                 } else {
                     sources.push(format!("<orderonly:{}{}>", d, o));
@@ -1167,14 +1172,7 @@ fn collect_sources(obj: &Object, source_root: &str, sources: &mut Vec<String>) {
                 format!("{}/", r.subdir)
             };
             if let Some(o) = r.outputs.get(*idx) {
-                let lower = o.to_lowercase();
-                if lower.ends_with(".c")
-                    || lower.ends_with(".cc")
-                    || lower.ends_with(".cpp")
-                    || lower.ends_with(".cxx")
-                    || lower.ends_with(".m")
-                    || lower.ends_with(".mm")
-                {
+                if is_compilable_source(o) {
                     sources.push(format!("<genout:{}{}>", d, o));
                 } else {
                     sources.push(format!("<orderonly:{}{}>", d, o));
@@ -1291,50 +1289,6 @@ fn builtin_dependency(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
         Some(Object::Bool(b)) => Some(*b),
         _ => None,
     };
-
-    // Threads is a virtual dependency - but respect required: disabled
-    if name == "threads" && !is_feature_disabled {
-        return Ok(Object::Dependency(DependencyData {
-            name: "threads".to_string(),
-            found: true,
-            version: String::new(),
-            compile_args: Vec::new(),
-            link_args: vec!["-lpthread".to_string()],
-            sources: Vec::new(),
-            include_dirs: Vec::new(),
-            dependencies: Vec::new(),
-            variables: std::collections::HashMap::new(),
-            version_reqs: Vec::new(),
-            is_internal: false,
-            kind: String::new(),
-
-                link_with: Vec::new(),
-                link_whole: Vec::new(),
-                config_tool: None,
-            }));
-    }
-
-    // OpenMP is a virtual dependency provided by the compiler
-    if name == "openmp" && !is_feature_disabled {
-        return Ok(Object::Dependency(DependencyData {
-            name: "openmp".to_string(),
-            found: true,
-            version: String::new(),
-            compile_args: vec!["-fopenmp".to_string()],
-            link_args: vec!["-fopenmp".to_string()],
-            sources: Vec::new(),
-            include_dirs: Vec::new(),
-            dependencies: Vec::new(),
-            variables: std::collections::HashMap::new(),
-            version_reqs: Vec::new(),
-            is_internal: false,
-            kind: String::new(),
-
-                link_with: Vec::new(),
-                link_whole: Vec::new(),
-                config_tool: None,
-            }));
-    }
 
     // Build cache key from name + method to avoid cross-method cache hits
     let method = VM::get_arg_str(args, "method", usize::MAX).unwrap_or("auto");
@@ -4049,19 +4003,12 @@ fn builtin_get_option(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
 
     // Return defaults for well-known options
     match name.as_str() {
-        "prefix" => Ok(Object::String("/usr/local".to_string())),
-        "bindir" => Ok(Object::String("bin".to_string())),
-        "libdir" => Ok(Object::String("lib".to_string())),
-        "libexecdir" => Ok(Object::String("libexec".to_string())),
-        "includedir" => Ok(Object::String("include".to_string())),
-        "datadir" => Ok(Object::String("share".to_string())),
-        "mandir" => Ok(Object::String("share/man".to_string())),
-        "infodir" => Ok(Object::String("share/info".to_string())),
-        "localedir" => Ok(Object::String("share/locale".to_string())),
-        "sysconfdir" => Ok(Object::String("etc".to_string())),
-        "localstatedir" => Ok(Object::String("var".to_string())),
-        "sharedstatedir" => Ok(Object::String("com".to_string())),
-        "sbindir" => Ok(Object::String("sbin".to_string())),
+        "prefix" | "bindir" | "libdir" | "libexecdir" | "includedir" | "datadir" | "mandir"
+        | "infodir" | "localedir" | "sysconfdir" | "localstatedir" | "sharedstatedir"
+        | "sbindir" | "licensedir" => Ok(Object::String(crate::options::builtin_string(
+            &vm.options,
+            &name,
+        ))),
         "buildtype" => Ok(Object::String("debug".to_string())),
         "debug" => Ok(Object::Bool(crate::options::effective_debug(&vm.options))),
         "optimization" => Ok(Object::String(crate::options::effective_optimization(

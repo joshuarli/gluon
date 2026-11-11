@@ -104,11 +104,31 @@ fn builtin_string_default(key: &str) -> Option<&'static str> {
     }
 }
 
+fn prefix_dependent_default(prefix: &str, key: &str) -> Option<&'static str> {
+    match (prefix.trim_end_matches('/'), key) {
+        ("/usr", "sysconfdir") => Some("/etc"),
+        ("/usr", "localstatedir") => Some("/var"),
+        ("/usr", "sharedstatedir") => Some("/var/lib"),
+        ("/usr/local", "localstatedir") => Some("/var/local"),
+        ("/usr/local", "sharedstatedir") => Some("/var/local/lib"),
+        _ => None,
+    }
+}
+
 pub fn builtin_string(options: &HashMap<String, Object>, key: &str) -> String {
     match options.get(key) {
         Some(Object::String(value)) => value.clone(),
         Some(Object::Int(value)) => value.to_string(),
-        _ => builtin_string_default(key).unwrap_or("").to_string(),
+        _ => {
+            let prefix = match options.get("prefix") {
+                Some(Object::String(prefix)) => prefix.as_str(),
+                _ => "/usr/local",
+            };
+            prefix_dependent_default(prefix, key)
+                .or_else(|| builtin_string_default(key))
+                .unwrap_or("")
+                .to_string()
+        }
     }
 }
 
@@ -720,6 +740,28 @@ mod tests {
         );
         assert_eq!(split_shell_args("  "), Vec::<String>::new());
         assert_eq!(split_shell_args("''"), vec![""]);
+    }
+
+    #[test]
+    fn builtin_directory_defaults_follow_the_prefix() {
+        let options = |prefix: &str| {
+            let mut options = HashMap::new();
+            options.insert("prefix".to_string(), Object::String(prefix.to_string()));
+            options
+        };
+        assert_eq!(builtin_string(&options("/usr"), "sysconfdir"), "/etc");
+        assert_eq!(builtin_string(&options("/usr"), "localstatedir"), "/var");
+        assert_eq!(builtin_string(&options("/usr"), "sharedstatedir"), "/var/lib");
+        assert_eq!(
+            builtin_string(&options("/usr/local"), "localstatedir"),
+            "/var/local"
+        );
+        assert_eq!(
+            builtin_string(&options("/usr/local"), "sharedstatedir"),
+            "/var/local/lib"
+        );
+        assert_eq!(builtin_string(&options("/usr/local"), "sysconfdir"), "etc");
+        assert_eq!(builtin_string(&options("/opt/x"), "sysconfdir"), "etc");
     }
 
     #[test]
