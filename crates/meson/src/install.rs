@@ -615,7 +615,7 @@ pub fn execute(plan: &InstallPlan, build_dir: &str, destdir: &str) -> Result<(),
 }
 
 fn fix_install_name(source: &str, destination: &str, final_path: &str) -> Result<(), String> {
-    if !source.ends_with(".dylib") {
+    if !source.ends_with(".dylib") || !is_mach_o(destination) {
         return Ok(());
     }
     match Command::new("install_name_tool")
@@ -634,6 +634,18 @@ fn fix_install_name(source: &str, destination: &str, final_path: &str) -> Result
             destination, error
         )),
     }
+}
+
+fn is_mach_o(path: &str) -> bool {
+    use std::io::Read;
+    let mut magic = [0u8; 4];
+    fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut magic))
+        .is_ok()
+        && matches!(
+            u32::from_be_bytes(magic),
+            0xfeed_face | 0xfeed_facf | 0xcefa_edfe | 0xcffa_edfe | 0xcafe_babe | 0xbeba_feca
+        )
 }
 
 fn destdir_path(destdir: &str, prefix: &str, destination: &str) -> String {
