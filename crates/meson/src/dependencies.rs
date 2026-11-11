@@ -105,13 +105,13 @@ pub fn find_dependency(vm: &mut VM, name: &str, args: &[CallArg]) -> Option<Obje
 
     match method {
         "pkg-config" => find_pkgconfig(vm, name, version_req, &modules),
-        "cmake" => find_cmake(name, version_req, &components),
+        "cmake" => find_cmake(vm, name, version_req, &components),
         "config-tool" => find_config_tool(name, version_req),
         "system" => find_system_library(name),
         "auto" | _ => {
             // Try methods in order
             find_pkgconfig(vm, name, version_req, &modules)
-                .or_else(|| find_cmake(name, version_req, &components))
+                .or_else(|| find_cmake(vm, name, version_req, &components))
                 .or_else(|| find_config_tool(name, version_req))
                 .or_else(|| find_system_library(name))
         }
@@ -212,8 +212,16 @@ fn find_pkgconfig(
     }))
 }
 
-fn find_cmake(name: &str, version_req: Option<&str>, components: &[String]) -> Option<Object> {
-    // Try cmake --find-package
+fn find_cmake(
+    vm: &VM,
+    name: &str,
+    version_req: Option<&str>,
+    components: &[String],
+) -> Option<Object> {
+    let probe_dir = std::path::Path::new(&vm.top_build_root)
+        .join("meson-private")
+        .join(format!("cmake_{}", name));
+    std::fs::create_dir_all(&probe_dir).ok()?;
     let mut args = vec![
         "--find-package".to_string(),
         format!("-DNAME={}", name),
@@ -226,7 +234,11 @@ fn find_cmake(name: &str, version_req: Option<&str>, components: &[String]) -> O
         args.push(format!("-DCOMPONENTS={}", components.join(";")));
     }
 
-    let output = Command::new("cmake").args(&args).output().ok()?;
+    let output = Command::new("cmake")
+        .args(&args)
+        .current_dir(&probe_dir)
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -240,6 +252,7 @@ fn find_cmake(name: &str, version_req: Option<&str>, components: &[String]) -> O
             "-DLANGUAGE=C",
             "-DMODE=COMPILE",
         ])
+        .current_dir(&probe_dir)
         .output()
         .ok()?;
 
@@ -261,6 +274,7 @@ fn find_cmake(name: &str, version_req: Option<&str>, components: &[String]) -> O
             "-DLANGUAGE=C",
             "-DMODE=LINK",
         ])
+        .current_dir(&probe_dir)
         .output()
         .ok()?;
 

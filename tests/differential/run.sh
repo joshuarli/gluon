@@ -114,6 +114,11 @@ run_compare_meson() {
     printf 'FAIL %s setup exit ref=%s cand=%s\n' "$id" "$ref_setup" "$cand_setup" >>"$TMPBASE/results.log"
     return 1
   fi
+  stray=$(cd "$cand_work" && ls -A | grep -vx builddir)
+  if [ -n "$stray" ]; then
+    printf 'FAIL %s setup wrote outside the build directory: %s\n' "$id" "$stray" >>"$TMPBASE/results.log"
+    return 1
+  fi
   if [ "$ref_setup" != "0" ]; then
     printf 'PASS %s setup-both-fail (both exit %s)\n' "$id" "$ref_setup" >>"$TMPBASE/results.log"
     return 0

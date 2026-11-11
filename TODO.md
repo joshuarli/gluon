@@ -51,14 +51,6 @@ Next: 27
 - **Fix with:** reference-parity
 - **Effort:** S
 
-### GLU-25 · P3 · cmake dependency probe writes CMakeFiles into the caller's directory
-- **Area:** meson
-- **Where:** `crates/meson/src/dependencies.rs` (`find_cmake`)
-- **Problem:** when a `dependency()` falls through to the cmake method, the probe runs `cmake --find-package` with the setup process's working directory, leaving `CMakeFiles/CMakeSystem.cmake` there. Meson runs dependency detection with the build directory as cwd.
-- **Recommendation:** Run dependency probes with the build directory as the working directory, or use a scratch directory.
-- **Fix with:** reference-parity
-- **Effort:** S
-
 ### GLU-26 · P3 · find_library with dirs skips the link check and system directories
 - **Area:** meson
 - **Where:** `crates/meson/src/compilers.rs` (`find_library`)
