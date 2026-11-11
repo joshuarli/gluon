@@ -28,7 +28,7 @@ reverses.
   `scripts/build-deps.sh`); Vulkan-Headers/Loader and shaderc come via
   bottles; SPIRV-Cross and libplacebo build via Meson. No CMake front end.
 - **OD-5 Pushing.** Verified commits on `main` are pushed to `origin`
-  (`git@github.com:joshuarli/gluon`) as they land. Never force-push. Red
+  (`git@github.com:laputa-systems/gluon`) as they land. Never force-push. Red
   work never lands on `main`, so never reaches `origin`.
 - **OD-6 Musl via Docker.** The static-musl artifact builds in a pinned
   Linux container (Docker, `--platform linux/amd64`, `tests/upstream/musl.sh`
