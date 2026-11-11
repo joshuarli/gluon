@@ -2136,6 +2136,27 @@ fn builtin_find_program(vm: &mut VM, args: &[CallArg]) -> Result<Object, String>
     }))
 }
 
+fn push_custom_command_argument(vm: &VM, item: &Object, command: &mut Vec<String>) {
+    match item {
+        Object::Array(items) => {
+            for inner in items {
+                push_custom_command_argument(vm, inner, command);
+            }
+        }
+        Object::String(s) => command.push(s.clone()),
+        Object::ExternalProgram(p) => command.push(p.path.clone()),
+        Object::File(f) => {
+            let root = if f.is_built { &vm.build_root } else { &vm.source_root };
+            if f.subdir.is_empty() {
+                command.push(format!("{}/{}", root, f.path));
+            } else {
+                command.push(format!("{}/{}/{}", root, f.subdir, f.path));
+            }
+        }
+        other => command.push(other.to_string_value()),
+    }
+}
+
 fn builtin_custom_target(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
     // Disabler propagation: if any argument is a Disabler, return Disabler
     for arg in args {
@@ -2164,36 +2185,8 @@ fn builtin_custom_target(vm: &mut VM, args: &[CallArg]) -> Result<Object, String
         .unwrap_or_default();
 
     let mut command = Vec::new();
-    match VM::get_arg_value(args, "command") {
-        Some(Object::Array(arr)) => {
-            for item in arr {
-                match item {
-                    Object::String(s) => command.push(s.clone()),
-                    Object::ExternalProgram(p) => command.push(p.path.clone()),
-                    Object::File(f) => {
-                        if f.is_built {
-                            if f.subdir.is_empty() {
-                                command.push(format!("{}/{}", vm.build_root, f.path));
-                            } else {
-                                command.push(format!("{}/{}/{}", vm.build_root, f.subdir, f.path));
-                            }
-                        } else if f.subdir.is_empty() {
-                            command.push(format!("{}/{}", vm.source_root, f.path));
-                        } else {
-                            command.push(format!("{}/{}/{}", vm.source_root, f.subdir, f.path));
-                        }
-                    }
-                    other => command.push(other.to_string_value()),
-                }
-            }
-        }
-        Some(Object::String(s)) => {
-            command.push(s.clone());
-        }
-        Some(other) => {
-            command.push(other.to_string_value());
-        }
-        None => {}
+    if let Some(value) = VM::get_arg_value(args, "command") {
+        push_custom_command_argument(vm, value, &mut command);
     }
 
     let mut input = Vec::new();
