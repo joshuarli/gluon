@@ -30,8 +30,8 @@ fn trivial_generated_manifest_parses() {
     let reparsed = ninja::manifest::parse(&text).unwrap();
 
     assert!(!reparsed.edges.is_empty());
-    assert_eq!(reparsed.edges.len(), 2, "compile + link edges");
-    assert!(reparsed.defaults.iter().any(|d| d == "hello"), "default is hello");
+    assert_eq!(reparsed.edges.len(), 3, "compile, link, and all edges");
+    assert!(reparsed.defaults.iter().any(|d| d == "all"), "default is all");
     for edge in &reparsed.edges {
         assert!(!edge.outputs.is_empty());
         assert!(!edge.rule.is_empty());

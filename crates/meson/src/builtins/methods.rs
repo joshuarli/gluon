@@ -224,6 +224,13 @@ pub fn register(vm: &mut VM) {
     vm.method_registry.insert(
         (
             "external_program".to_string(),
+            "language_version".to_string(),
+        ),
+        program_version,
+    );
+    vm.method_registry.insert(
+        (
+            "external_program".to_string(),
             "install_sources".to_string(),
         ),
         program_install_sources,
@@ -358,6 +365,10 @@ pub fn register(vm: &mut VM) {
     );
     vm.method_registry.insert(
         ("meson".to_string(), "add_dist_script".to_string()),
+        meson_noop,
+    );
+    vm.method_registry.insert(
+        ("meson".to_string(), "add_devenv".to_string()),
         meson_noop,
     );
     vm.method_registry.insert(
@@ -1190,15 +1201,16 @@ fn dep_get_variable(_vm: &mut VM, obj: &Object, args: &[CallArg]) -> Result<Obje
                 if let Some(val) = d.variables.get(var) {
                     return Ok(Object::String(val.clone()));
                 }
-                let config_tool = format!("{}-config", d.name);
-                if let Ok(output) = std::process::Command::new(&config_tool)
-                    .arg(format!("--{}", var))
-                    .output()
-                {
-                    if output.status.success() {
-                        let val = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                        if !val.is_empty() {
-                            return Ok(Object::String(val));
+                if let Some(config_tool) = &d.config_tool {
+                    if let Ok(output) = std::process::Command::new(config_tool)
+                        .arg(format!("--{}", var))
+                        .output()
+                    {
+                        if output.status.success() {
+                            let val = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                            if !val.is_empty() {
+                                return Ok(Object::String(val));
+                            }
                         }
                     }
                 }
@@ -1227,7 +1239,7 @@ fn dep_get_variable(_vm: &mut VM, obj: &Object, args: &[CallArg]) -> Result<Obje
     }
 }
 
-fn dep_get_pkgconfig_variable(
+pub(crate) fn dep_get_pkgconfig_variable(
     _vm: &mut VM,
     obj: &Object,
     args: &[CallArg],
@@ -1279,14 +1291,15 @@ fn dep_get_configtool_variable(
                 return Ok(Object::String(val.clone()));
             }
             // Try running the config tool
-            let config_tool = format!("{}-config", d.name);
-            if let Ok(output) = std::process::Command::new(&config_tool)
-                .arg(format!("--{}", var))
-                .output()
-            {
-                if output.status.success() {
-                    let val = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    return Ok(Object::String(val));
+            if let Some(config_tool) = &d.config_tool {
+                if let Ok(output) = std::process::Command::new(config_tool)
+                    .arg(format!("--{}", var))
+                    .output()
+                {
+                    if output.status.success() {
+                        let val = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                        return Ok(Object::String(val));
+                    }
                 }
             }
         }
@@ -2196,6 +2209,8 @@ fn subproject_dependency(vm: &mut VM, obj: &Object, args: &[CallArg]) -> Result<
                 version: String::new(),
                 compile_args: Vec::new(),
                 link_args: vec![lib_flag],
+                link_with: Vec::new(),
+                link_whole: Vec::new(),
                 sources: Vec::new(),
                 include_dirs: Vec::new(),
                 dependencies: Vec::new(),
@@ -2203,6 +2218,7 @@ fn subproject_dependency(vm: &mut VM, obj: &Object, args: &[CallArg]) -> Result<
                 version_reqs: Vec::new(),
                 is_internal: false,
                 kind: "external_project".to_string(),
+                config_tool: None,
             }));
         }
 
@@ -2301,9 +2317,12 @@ fn generator_process(vm: &mut VM, obj: &Object, args: &[CallArg]) -> Result<Obje
             }
         }
 
-        let exe_str = match &*g.exe {
+        let exe_obj = match &*g.exe {
+            Object::String(s) => crate::builtins::functions::resolve_command_program(vm, s)?,
+            other => other.clone(),
+        };
+        let exe_str = match &exe_obj {
             Object::ExternalProgram(p) => p.path.clone(),
-            Object::String(s) => s.clone(),
             Object::File(f) => f.path.clone(),
             other => other.to_string_value(),
         };
@@ -2322,36 +2341,42 @@ fn generator_process(vm: &mut VM, obj: &Object, args: &[CallArg]) -> Result<Obje
             } else {
                 g.output.clone()
             };
-            for tmpl in templates {
+            let mut source_outputs = Vec::new();
+            for tmpl in &templates {
                 let out = tmpl
                     .replace("@PLAINNAME@", &plainname)
                     .replace("@BASENAME@", &basename);
-                let mut command = vec![exe_str.clone()];
-                command.extend(g.arguments.iter().cloned());
-                command.extend(extra_args.iter().cloned());
-                let id = format!("generator:{}@{}", out, vm.current_subdir);
-                let ct = CustomTarget {
-                    name: out.clone(),
-                    id: id.clone(),
-                    command,
-                    input: vec![source.clone()],
-                    output: vec![out.clone()],
-                    depends: depends.clone(),
-                    depend_files: Vec::new(),
-                    depfile: g.depfile.clone(),
-                    capture: g.capture,
-                    feed: false,
-                    install: false,
-                    install_dir: Vec::new(),
-                    install_tag: Vec::new(),
-                    build_by_default: true,
-                    build_always_stale: false,
-                    env: HashMap::new(),
-                    subdir: vm.current_subdir.clone(),
-                };
-                vm.build_data.custom_targets.push(ct);
-                outputs.push(out);
+                source_outputs.push(out);
             }
+            if source_outputs.is_empty() {
+                continue;
+            }
+            let mut command = vec![exe_str.clone()];
+            command.extend(g.arguments.iter().cloned());
+            command.extend(extra_args.iter().cloned());
+            crate::builtins::functions::wrap_script_command(&mut command);
+            let id = format!("generator:{}@{}", source_outputs[0], vm.current_subdir);
+            let ct = CustomTarget {
+                name: source_outputs[0].clone(),
+                id: id.clone(),
+                command,
+                input: vec![source.clone()],
+                output: source_outputs.clone(),
+                depends: depends.clone(),
+                depend_files: Vec::new(),
+                depfile: g.depfile.clone(),
+                capture: g.capture,
+                feed: false,
+                install: false,
+                install_dir: Vec::new(),
+                install_tag: Vec::new(),
+                build_by_default: true,
+                build_always_stale: false,
+                env: HashMap::new(),
+                subdir: vm.current_subdir.clone(),
+            };
+            vm.build_data.custom_targets.push(ct);
+            outputs.extend(source_outputs);
         }
 
         Ok(Object::GeneratedList(GeneratedListData {
@@ -2783,7 +2808,50 @@ fn compiler_check_header(_vm: &mut VM, obj: &Object, args: &[CallArg]) -> Result
     compiler_has_header(_vm, obj, args)
 }
 
-fn compiler_has_function(_vm: &mut VM, obj: &Object, args: &[CallArg]) -> Result<Object, String> {
+fn args_with_language_std(vm: &VM, compiler: &CompilerData, args: &[CallArg]) -> Vec<CallArg> {
+    let std = match compiler.language.as_str() {
+        "c" => vm.build_data.c_std.as_str(),
+        "cpp" => vm.build_data.cpp_std.as_str(),
+        _ => return args.to_vec(),
+    };
+    let Ok(std) = crate::compilers::first_supported_std(compiler, std) else {
+        return args.to_vec();
+    };
+    let std = std.as_str();
+    if std.is_empty() || std == "none" {
+        return args.to_vec();
+    }
+    let std_arg = format!("-std={}", std);
+    let mut extended: Vec<Object> = Vec::new();
+    for arg in args {
+        if arg.name.as_deref() == Some("args") {
+            match &arg.value {
+                Object::Array(items) => extended.extend(items.iter().cloned()),
+                Object::String(value) => extended.push(Object::String(value.clone())),
+                _ => {}
+            }
+        }
+    }
+    if extended
+        .iter()
+        .any(|value| value.to_string_value().starts_with("-std="))
+    {
+        return args.to_vec();
+    }
+    extended.push(Object::String(std_arg));
+    let mut result: Vec<CallArg> = args
+        .iter()
+        .filter(|arg| arg.name.as_deref() != Some("args"))
+        .cloned()
+        .collect();
+    result.push(CallArg {
+        name: Some("args".to_string()),
+        value: Object::Array(extended),
+    });
+    result
+}
+
+fn compiler_has_function(vm: &mut VM, obj: &Object, args: &[CallArg]) -> Result<Object, String> {
     if let Object::Compiler(c) = obj {
         if let Some(result) = check_required_disabled(args, "compiler.has_function") {
             return result;
@@ -2792,7 +2860,8 @@ fn compiler_has_function(_vm: &mut VM, obj: &Object, args: &[CallArg]) -> Result
             .first()
             .map(|v| v.to_string_value())
             .unwrap_or_default();
-        let result = crate::compilers::check_function(c, &func, args);
+        let probe_args = args_with_language_std(vm, c, args);
+        let result = crate::compilers::check_function(c, &func, &probe_args);
         check_required_result(
             args,
             result,
@@ -3324,18 +3393,20 @@ fn compiler_get_supported_function_attributes(
     }
 }
 
+fn argument_syntax(compiler_id: &str) -> &'static str {
+    match compiler_id {
+        "msvc" | "clang-cl" | "intel-cl" => "msvc",
+        _ => "gcc",
+    }
+}
+
 fn compiler_get_argument_syntax(
     _vm: &mut VM,
     obj: &Object,
     _args: &[CallArg],
 ) -> Result<Object, String> {
     if let Object::Compiler(c) = obj {
-        let syntax = if c.id.contains("msvc") || c.id.contains("cl") {
-            "msvc"
-        } else {
-            "gcc"
-        };
-        Ok(Object::String(syntax.to_string()))
+        Ok(Object::String(argument_syntax(&c.id).to_string()))
     } else {
         Err("Not a compiler".to_string())
     }
@@ -3353,18 +3424,230 @@ fn compiler_compute_int(_vm: &mut VM, obj: &Object, args: &[CallArg]) -> Result<
     }
 }
 
-fn compiler_preprocess(_vm: &mut VM, _obj: &Object, args: &[CallArg]) -> Result<Object, String> {
-    let mut sources = Vec::new();
-    for arg in VM::get_positional_args(args) {
-        if let Object::String(s) = arg {
-            sources.push(Object::File(FileData {
-                path: s.clone(),
-                subdir: String::new(),
-                is_built: true,
-            }));
+fn normalize_preprocess_path(path: &str) -> String {
+    if path.starts_with('/') {
+        return path.to_string();
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    for component in path.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                if parts.last().is_some_and(|last| *last != "..") {
+                    parts.pop();
+                } else {
+                    parts.push("..");
+                }
+            }
+            other => parts.push(other),
         }
     }
-    Ok(Object::Array(sources))
+    parts.join("/")
+}
+
+fn preprocess_join_subdir(subdir: &str, path: &str) -> String {
+    if path.starts_with('/') || subdir.is_empty() {
+        path.to_string()
+    } else {
+        format!("{}/{}", subdir, path)
+    }
+}
+
+fn preprocess_include_dirs(vm: &VM, obj: &Object) -> Vec<String> {
+    let mut dirs = Vec::new();
+    match obj {
+        Object::Array(items) => {
+            for item in items {
+                dirs.extend(preprocess_include_dirs(vm, item));
+            }
+        }
+        Object::IncludeDirs(d) => dirs.extend(d.dirs.clone()),
+        Object::String(s) => dirs.push(preprocess_join_subdir(&vm.current_subdir, s)),
+        _ => {}
+    }
+    dirs
+}
+
+fn preprocess_built_path(vm: &VM, subdir: &str, output: &str) -> String {
+    if std::path::Path::new(output).is_absolute() {
+        output.to_string()
+    } else if subdir.is_empty() {
+        format!("{}/{}", vm.build_root, output)
+    } else {
+        format!("{}/{}/{}", vm.build_root, subdir, output)
+    }
+}
+
+fn collect_preprocess_inputs(
+    vm: &VM,
+    obj: &Object,
+    subdir: &str,
+    inputs: &mut Vec<String>,
+) {
+    match obj {
+        Object::Array(items) => {
+            for item in items {
+                collect_preprocess_inputs(vm, item, subdir, inputs);
+            }
+        }
+        Object::String(s) => {
+            if s.starts_with('/') {
+                inputs.push(s.clone());
+            } else if subdir.is_empty() {
+                inputs.push(format!("{}/{}", vm.source_root, s));
+            } else {
+                inputs.push(format!("{}/{}/{}", vm.source_root, subdir, s));
+            }
+        }
+        Object::File(f) => {
+            let base = if f.is_built {
+                &vm.build_root
+            } else {
+                &vm.source_root
+            };
+            let path = if f.subdir.is_empty() {
+                f.path.clone()
+            } else {
+                format!("{}/{}", f.subdir, f.path)
+            };
+            inputs.push(format!("{}/{}", base, path));
+        }
+        Object::CustomTarget(r) => {
+            for output in &r.outputs {
+                inputs.push(preprocess_built_path(vm, &r.subdir, output));
+            }
+        }
+        Object::CustomTargetIndex(r, idx) => {
+            if let Some(output) = r.outputs.get(*idx) {
+                inputs.push(preprocess_built_path(vm, &r.subdir, output));
+            }
+        }
+        Object::GeneratedList(data) => {
+            for output in &data.outputs {
+                inputs.push(preprocess_built_path(vm, subdir, output));
+            }
+        }
+        _ => {}
+    }
+}
+
+fn preprocess_depends(obj: &Object, depends: &mut Vec<Object>) {
+    match obj {
+        Object::Array(items) => {
+            for item in items {
+                preprocess_depends(item, depends);
+            }
+        }
+        Object::CustomTarget(_) | Object::CustomTargetIndex(_, _) | Object::File(_) => {
+            depends.push(obj.clone());
+        }
+        _ => {}
+    }
+}
+
+fn preprocess_dependencies(obj: &Object, dependencies: &mut Vec<Object>) {
+    match obj {
+        Object::Array(items) => {
+            for item in items {
+                preprocess_dependencies(item, dependencies);
+            }
+        }
+        Object::Dependency(_) => dependencies.push(obj.clone()),
+        _ => {}
+    }
+}
+
+fn compiler_preprocess(vm: &mut VM, obj: &Object, args: &[CallArg]) -> Result<Object, String> {
+    let compiler = match obj {
+        Object::Compiler(c) => c.clone(),
+        _ => return Err("Not a compiler".to_string()),
+    };
+
+    let mut inputs = Vec::new();
+    let subdir = vm.current_subdir.clone();
+    for arg in VM::get_positional_args(args) {
+        collect_preprocess_inputs(vm, arg, &subdir, &mut inputs);
+    }
+    if inputs.is_empty() {
+        return Err("compiler.preprocess() requires at least one source".to_string());
+    }
+
+    let output_template = VM::get_arg_str(args, "output", usize::MAX)
+        .unwrap_or("@PLAINNAME@.i")
+        .to_string();
+    let compile_args = VM::get_arg_string_array(args, "compile_args");
+    let mut include_dirs = Vec::new();
+    if let Some(value) = VM::get_arg_value(args, "include_directories") {
+        include_dirs.extend(preprocess_include_dirs(vm, value));
+    }
+
+    let mut dependencies = Vec::new();
+    if let Some(value) = VM::get_arg_value(args, "dependencies") {
+        preprocess_dependencies(value, &mut dependencies);
+    }
+    let include_dirs: Vec<String> = include_dirs
+        .into_iter()
+        .map(|dir| normalize_preprocess_path(&dir))
+        .collect();
+
+    let mut depends = Vec::new();
+    if let Some(value) = VM::get_arg_value(args, "depends") {
+        preprocess_depends(value, &mut depends);
+    }
+
+    let counter = vm
+        .build_data
+        .preprocess_targets
+        .iter()
+        .filter(|t| t.subdir == subdir)
+        .count();
+    let name = format!("preprocessor_{}", counter);
+
+    let mut outputs = Vec::new();
+    for input in &inputs {
+        let plainname = std::path::Path::new(input)
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| input.clone());
+        let basename = std::path::Path::new(&plainname)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| plainname.clone());
+        let output = output_template
+            .replace("@PLAINNAME@", &plainname)
+            .replace("@BASENAME@", &basename);
+        let private = format!("{}.p/{}", name, output);
+        if subdir.is_empty() {
+            outputs.push(private);
+        } else {
+            outputs.push(format!("{}/{}", subdir, private));
+        }
+    }
+
+    vm.build_data.preprocess_targets.push(PreprocessTarget {
+        name: name.clone(),
+        subdir: subdir.clone(),
+        language: compiler.language.clone(),
+        command: compiler.cmd.clone(),
+        inputs,
+        outputs: outputs.clone(),
+        include_dirs,
+        dependencies,
+        compile_args,
+        depends,
+    });
+
+    let target = CustomTargetRef {
+        name: name.clone(),
+        id: format!("preprocess:{}@{}", name, subdir),
+        outputs,
+        subdir: String::new(),
+    };
+    Ok(Object::Array(
+        (0..target.outputs.len())
+            .map(|i| Object::CustomTargetIndex(target.clone(), i))
+            .collect(),
+    ))
 }
 
 fn compiler_symbols_have_underscore_prefix(
@@ -3434,5 +3717,19 @@ fn compiler_run(vm: &mut VM, obj: &Object, args: &[CallArg]) -> Result<Object, S
         Ok(Object::RunResult(result))
     } else {
         Err("Not a compiler".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::argument_syntax;
+
+    #[test]
+    fn only_cl_style_compilers_take_msvc_arguments() {
+        let syntaxes: Vec<_> = ["gcc", "clang", "msvc", "clang-cl", "intel-cl", "intel"]
+            .iter()
+            .map(|id| argument_syntax(id))
+            .collect();
+        assert_eq!(syntaxes, ["gcc", "gcc", "msvc", "msvc", "msvc", "gcc"]);
     }
 }

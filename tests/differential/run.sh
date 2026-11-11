@@ -106,9 +106,11 @@ run_compare_meson() {
       setup_env+=("$line")
     done <"$src/setup-env.txt"
   fi
-  env ${setup_env[@]+"${setup_env[@]}"} meson setup "$ref_build" "$src_copy" ${setup_args[@]+"${setup_args[@]}"} >"$work/setup.log" 2>&1
+  setup_path=$PATH
+  [ -d "$src_copy/bin" ] && setup_path="$src_copy/bin:$PATH"
+  PATH=$setup_path env ${setup_env[@]+"${setup_env[@]}"} meson setup "$ref_build" "$src_copy" ${setup_args[@]+"${setup_args[@]}"} >"$work/setup.log" 2>&1
   ref_setup=$?
-  (cd "$cand_work" && env ${setup_env[@]+"${setup_env[@]}"} "$GLUON_MESON" setup "$src_copy" ${setup_args[@]+"${setup_args[@]}"} >"$work/cand_setup.log" 2>&1)
+  (cd "$cand_work" && PATH=$setup_path env ${setup_env[@]+"${setup_env[@]}"} "$GLUON_MESON" setup "$src_copy" ${setup_args[@]+"${setup_args[@]}"} >"$work/cand_setup.log" 2>&1)
   cand_setup=$?
   if [ "$ref_setup" != "$cand_setup" ]; then
     printf 'FAIL %s setup exit ref=%s cand=%s\n' "$id" "$ref_setup" "$cand_setup" >>"$TMPBASE/results.log"
@@ -189,10 +191,14 @@ run_compare_meson() {
     bn=$(sed -n "${i}p" "$work/final_base.txt")
     ref_path=$(cd "$ref_build" && find . -type f -name "$bn" | head -1)
     cand_path=$(cd "$cand_build" && find . -type f -name "$bn" | head -1)
-    # only compare Mach-O binaries via nm symbols (strip addresses)
-    if file "$ref_build/$ref_path" 2>/dev/null | grep -q 'Mach-O'; then
-      nm "$ref_build/$ref_path" 2>/dev/null | awk '{print $NF}' | LC_ALL=C sort >"$work/nm_ref.txt" || true
-      nm "$cand_build/$cand_path" 2>/dev/null | awk '{print $NF}' | LC_ALL=C sort >"$work/nm_cand.txt" || true
+    nm_flags=
+    case $(file "$ref_build/$ref_path" 2>/dev/null) in
+      *Mach-O*) nm_flags=-a ;;
+      *ELF*|*'current ar archive'*) nm_flags='-g --defined-only' ;;
+    esac
+    if [ -n "$nm_flags" ]; then
+      nm $nm_flags "$ref_build/$ref_path" 2>/dev/null | awk '{print $NF}' | LC_ALL=C sort >"$work/nm_ref.txt" || true
+      nm $nm_flags "$cand_build/$cand_path" 2>/dev/null | awk '{print $NF}' | LC_ALL=C sort >"$work/nm_cand.txt" || true
       if ! diff -q "$work/nm_ref.txt" "$work/nm_cand.txt" >/dev/null 2>&1; then
         printf 'FAIL %s symbols mismatch for %s\n' "$id" "$bn" >>"$TMPBASE/results.log"
         diff "$work/nm_ref.txt" "$work/nm_cand.txt" >>"$TMPBASE/results.log" || true

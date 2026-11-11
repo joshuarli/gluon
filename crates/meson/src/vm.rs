@@ -13,6 +13,27 @@ pub struct CallArg {
     pub value: Object,
 }
 
+pub fn call_args(names: Vec<Option<String>>, values: Vec<Object>) -> Result<Vec<CallArg>, String> {
+    let mut args = Vec::with_capacity(values.len());
+    let mut expanded = Vec::new();
+    for (name, value) in names.into_iter().zip(values) {
+        match (name.as_deref(), value) {
+            (Some("kwargs"), Object::Dict(entries)) => expanded.extend(entries),
+            (Some("kwargs"), other) => {
+                return Err(format!("kwargs must be a dict, not {}", other.type_name()));
+            }
+            (_, value) => args.push(CallArg { name, value }),
+        }
+    }
+    for (key, value) in expanded {
+        if args.iter().any(|arg| arg.name.as_deref() == Some(key.as_str())) {
+            return Err(format!("Entry \"{key}\" defined both as a keyword argument and in a \"kwargs\" argument."));
+        }
+        args.push(CallArg { name: Some(key), value });
+    }
+    Ok(args)
+}
+
 /// Iterator state for foreach loops
 #[derive(Debug, Clone)]
 pub enum IterState {
@@ -132,6 +153,7 @@ pub struct ProjectInfo {
 pub struct BuildData {
     pub targets: Vec<BuildTarget>,
     pub custom_targets: Vec<CustomTarget>,
+    pub preprocess_targets: Vec<PreprocessTarget>,
     pub tests: Vec<TestDef>,
     pub benchmarks: Vec<TestDef>,
     pub install_headers: Vec<InstallData>,
@@ -171,6 +193,7 @@ pub struct BuildTarget {
     pub link_with: Vec<Object>,
     pub link_whole: Vec<Object>,
     pub link_args: Vec<String>,
+    pub link_depends: Vec<String>,
     pub c_args: Vec<String>,
     pub cpp_args: Vec<String>,
     pub objc_args: Vec<String>,
@@ -178,6 +201,7 @@ pub struct BuildTarget {
     pub rust_args: Vec<String>,
     pub install: bool,
     pub install_dir: Option<String>,
+    pub install_mode: Option<Vec<String>>,
     pub install_rpath: String,
     pub build_rpath: String,
     pub pic: Option<bool>,
@@ -318,6 +342,20 @@ pub struct CustomTarget {
     pub build_always_stale: bool,
     pub env: HashMap<String, String>,
     pub subdir: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PreprocessTarget {
+    pub name: String,
+    pub subdir: String,
+    pub language: String,
+    pub command: Vec<String>,
+    pub inputs: Vec<String>,
+    pub outputs: Vec<String>,
+    pub include_dirs: Vec<String>,
+    pub dependencies: Vec<Object>,
+    pub compile_args: Vec<String>,
+    pub depends: Vec<Object>,
 }
 
 #[derive(Debug, Clone)]
@@ -748,14 +786,11 @@ impl VM {
             }
             OpCode::Call(nargs) => {
                 let nargs = *nargs;
-                let mut args = Vec::new();
                 let names_start = self.arg_names.len() - nargs;
                 let names: Vec<Option<String>> = self.arg_names.drain(names_start..).collect();
                 let values_start = self.stack.len() - nargs;
                 let values: Vec<Object> = self.stack.drain(values_start..).collect();
-                for (name, value) in names.into_iter().zip(values) {
-                    args.push(CallArg { name, value });
-                }
+                let args = call_args(names, values)?;
                 let func = self.stack.pop().ok_or("Stack underflow on call")?;
                 // Check for disabler in arguments - propagate through most functions
                 let has_disabler_arg = args.iter().any(|a| {
@@ -818,14 +853,11 @@ impl VM {
             OpCode::MethodCall(method, nargs) => {
                 let nargs = *nargs;
                 let method = method.clone();
-                let mut args = Vec::new();
                 let names_start = self.arg_names.len() - nargs;
                 let names: Vec<Option<String>> = self.arg_names.drain(names_start..).collect();
                 let values_start = self.stack.len() - nargs;
                 let values: Vec<Object> = self.stack.drain(values_start..).collect();
-                for (name, value) in names.into_iter().zip(values) {
-                    args.push(CallArg { name, value });
-                }
+                let args = call_args(names, values)?;
                 let obj = self.stack.pop().ok_or("Stack underflow on method call")?;
                 if matches!(obj, Object::Disabler) {
                     if method == "found" {
@@ -1246,17 +1278,10 @@ impl VM {
         for arg in args {
             if arg.name.as_deref() == Some(name) {
                 match &arg.value {
-                    Object::Array(arr) => {
-                        return arr
-                            .iter()
-                            .filter_map(|v| {
-                                if let Object::String(s) = v {
-                                    Some(s.clone())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect();
+                    Object::Array(_) => {
+                        let mut strings = Vec::new();
+                        flatten_strings(&arg.value, &mut strings);
+                        return strings;
                     }
                     Object::String(s) => return vec![s.clone()],
                     _ => {}
@@ -1264,5 +1289,49 @@ impl VM {
             }
         }
         Vec::new()
+    }
+}
+
+fn flatten_strings(value: &Object, strings: &mut Vec<String>) {
+    match value {
+        Object::String(s) => strings.push(s.clone()),
+        Object::Array(items) => {
+            for item in items {
+                flatten_strings(item, strings);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod call_args_tests {
+    use super::*;
+
+    #[test]
+    fn a_kwargs_dict_becomes_keyword_arguments() {
+        let names = vec![None, Some("install".to_string()), Some("kwargs".to_string())];
+        let values = vec![
+            Object::String("drm".into()),
+            Object::Bool(true),
+            Object::Dict(vec![("version".into(), Object::String("2.4.134".into()))]),
+        ];
+        let args = call_args(names, values).unwrap();
+        let named: Vec<(Option<&str>, String)> =
+            args.iter().map(|a| (a.name.as_deref(), a.value.to_string_value())).collect();
+        assert_eq!(
+            named,
+            vec![(None, "drm".to_string()), (Some("install"), "true".to_string()), (Some("version"), "2.4.134".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_key_given_twice_is_refused() {
+        let names = vec![Some("version".to_string()), Some("kwargs".to_string())];
+        let values = vec![
+            Object::String("1".into()),
+            Object::Dict(vec![("version".into(), Object::String("2".into()))]),
+        ];
+        assert!(call_args(names, values).unwrap_err().contains("\"version\""));
     }
 }

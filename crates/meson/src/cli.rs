@@ -33,6 +33,7 @@ enum CliCommand {
     Format(FormatArgs),
     Help,
     Version,
+    Internal(Vec<String>),
     Error(i32, String),
 }
 
@@ -152,6 +153,7 @@ impl Cli {
             "env2mfile" => CliCommand::Env2mfile,
             "format" | "fmt" => Self::parse_format(rest),
             "--version" | "version" => CliCommand::Version,
+            "--internal" => CliCommand::Internal(rest.to_vec()),
             "help" | "--help" | "-h" => CliCommand::Help,
             // If first arg is a directory, treat as setup
             _ if Path::new(cmd).is_dir() || !cmd.starts_with('-') => {
@@ -639,6 +641,7 @@ impl Cli {
                 println!("{}", crate::VERSION);
                 0
             }
+            CliCommand::Internal(args) => crate::internal::run(args),
             CliCommand::Help => {
                 self.print_help();
                 0
@@ -726,6 +729,7 @@ impl Cli {
         // Load cross/native files
         if let Some(ref cross) = args.cross_file {
             let machine_config = options::parse_machine_file(cross);
+            record_strip_program(&build_dir, &machine_config);
             // Apply cross file settings
             for (section, values) in &machine_config {
                 for (key, value) in values {
@@ -745,7 +749,8 @@ impl Cli {
                     interp
                         .vm
                         .options
-                        .insert(opt_key, crate::options::parse_option_value(value));
+                        .insert(opt_key.clone(), crate::options::parse_option_value(value));
+                    interp.vm.cmdline_option_keys.insert(opt_key);
                 }
             }
         }
@@ -758,6 +763,7 @@ impl Cli {
                 format!("{}/{}", source_dir, native)
             };
             let machine_config = options::parse_machine_file(&native_path);
+            record_strip_program(&build_dir, &machine_config);
             if let Some(properties) = machine_config.get("properties") {
                 for (key, value) in properties {
                     interp
@@ -785,7 +791,8 @@ impl Cli {
                     interp
                         .vm
                         .options
-                        .insert(opt_key, crate::options::parse_option_value(value));
+                        .insert(opt_key.clone(), crate::options::parse_option_value(value));
+                    interp.vm.cmdline_option_keys.insert(opt_key);
                 }
             }
         }
@@ -830,6 +837,30 @@ impl Cli {
 
         // Generate build.ninja
         interp.vm.build_data.options = interp.vm.options.clone();
+        for (key, std) in [
+            (
+                "compiler_c",
+                interp.vm.build_data.c_std.clone(),
+            ),
+            (
+                "compiler_cpp",
+                interp.vm.build_data.cpp_std.clone(),
+            ),
+        ] {
+            let Some(crate::objects::Object::Compiler(compiler)) =
+                interp.vm.globals.get(key).cloned()
+            else {
+                continue;
+            };
+            match crate::compilers::first_supported_std(&compiler, &std) {
+                Ok(chosen) if key == "compiler_c" => interp.vm.build_data.c_std = chosen,
+                Ok(chosen) => interp.vm.build_data.cpp_std = chosen,
+                Err(e) => {
+                    eprintln!("ERROR: {}", e);
+                    return 1;
+                }
+            }
+        }
         let install_plan = match crate::install::generate(
             &interp.vm.build_data,
             &interp.vm.options,
@@ -851,7 +882,8 @@ impl Cli {
             .unwrap_or_else(|_| "meson".to_string());
         let backend = NinjaBackend::new(&source_dir, &build_dir)
             .with_meson_command(&meson_command)
-            .with_install_aliases();
+            .with_install_aliases()
+            .with_toolchain(toolchain(&interp.vm));
         let ninja = match backend.generate(&interp.vm.build_data, &project) {
             Ok(n) => n,
             Err(e) => {
@@ -1081,7 +1113,9 @@ impl Cli {
                 return 1;
             }
         };
-        match crate::install::execute(&plan, &build_dir, &destdir) {
+        let strip = args.strip || configured_strip(&build_dir);
+        let strip_program = configured_strip_program(&build_dir);
+        match crate::install::execute(&plan, &build_dir, &destdir, strip, &strip_program) {
             Ok(()) => 0,
             Err(e) => {
                 eprintln!("Installation failed: {}", e);
@@ -1447,27 +1481,23 @@ mod tests {
 
     #[test]
     fn ninja_spawn_failure_fails() {
+        if std::env::var_os("GLUON_EMPTY_PATH_CHILD").is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "cli::tests::ninja_spawn_failure_fails",
+                    "--test-threads=1",
+                ])
+                .env("GLUON_EMPTY_PATH_CHILD", "1")
+                .env("PATH", "")
+                .status()
+                .unwrap();
+            assert!(status.success(), "the empty-PATH child run failed");
+            return;
+        }
         let dir = temp_build("spawn");
         std::fs::create_dir_all(dir.join("meson-info")).unwrap();
         std::fs::write(dir.join("meson-info/intro-tests.json"), "[{\"name\":\"t\"}]").unwrap();
-        let old = std::env::var_os("PATH");
-        struct RestorePath(Option<std::ffi::OsString>);
-        impl Drop for RestorePath {
-            fn drop(&mut self) {
-                // SAFETY: restores the PATH this test replaced.
-                unsafe {
-                    match self.0.take() {
-                        Some(path) => std::env::set_var("PATH", path),
-                        None => std::env::remove_var("PATH"),
-                    }
-                }
-            }
-        }
-        let _restore = RestorePath(old);
-        // SAFETY: restored by RestorePath, including on panic.
-        unsafe {
-            std::env::set_var("PATH", "");
-        }
         let code = test_cli(dir.to_str().unwrap(), true).run();
         assert_ne!(code, 0);
         std::fs::remove_dir_all(&dir).ok();
@@ -1567,4 +1597,86 @@ fn format_meson_source(source: &str) -> String {
     }
 
     result
+}
+
+pub fn meson_program() -> String {
+    std::env::current_exe()
+        .expect("the running meson has an executable path")
+        .to_string_lossy()
+        .into_owned()
+}
+
+pub fn split_command(value: &str) -> Vec<String> {
+    value.split_whitespace().map(str::to_string).collect()
+}
+
+fn record_strip_program(build_dir: &str, machine: &HashMap<String, HashMap<String, String>>) {
+    let Some(value) = machine.get("binaries").and_then(|binaries| binaries.get("strip")) else {
+        return;
+    };
+    let program = first_program(value);
+    let _ = std::fs::write(
+        format!("{}/meson-private/strip_bin.txt", build_dir),
+        program,
+    );
+}
+
+fn first_program(value: &str) -> String {
+    let trimmed = value.trim();
+    let inner = trimmed
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(trimmed);
+    let first = inner.split(',').next().unwrap_or(inner).trim();
+    let program = first.trim_matches(|c| c == '\'' || c == '"' || c == ' ');
+    if program.is_empty() {
+        "strip".to_string()
+    } else {
+        program.to_string()
+    }
+}
+
+fn configured_strip_program(build_dir: &str) -> String {
+    std::fs::read_to_string(format!("{}/meson-private/strip_bin.txt", build_dir))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "strip".to_string())
+}
+
+fn configured_strip(build_dir: &str) -> bool {
+    let cmd_file = format!("{}/meson-private/cmd_line.txt", build_dir);
+    let content = match std::fs::read_to_string(&cmd_file) {
+        Ok(content) => content,
+        Err(_) => return false,
+    };
+    let saved: deser_value::Value = deser_json::from_str(&content).unwrap_or_default();
+    saved["options"]
+        .as_seq()
+        .map(|options| {
+            options.iter().any(|opt| {
+                opt.as_str()
+                    .map(|s| s == "strip=true")
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn toolchain(vm: &crate::vm::VM) -> crate::backend::Toolchain {
+    let mut toolchain = crate::backend::Toolchain::default();
+    if let Some(crate::objects::Object::Compiler(c)) = vm.globals.get("compiler_c") {
+        toolchain.c = c.cmd.clone();
+    }
+    if let Some(crate::objects::Object::Compiler(c)) = vm.globals.get("compiler_cpp") {
+        toolchain.cpp = c.cmd.clone();
+    }
+    if let Some(archiver) = std::env::var("AR")
+        .ok()
+        .map(|value| split_command(&value))
+        .filter(|words| !words.is_empty())
+    {
+        toolchain.archiver = archiver;
+    }
+    toolchain
 }

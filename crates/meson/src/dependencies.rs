@@ -1,7 +1,7 @@
 use crate::objects::*;
 use crate::vm::*;
 /// Dependency detection: pkg-config, cmake, config-tool, system library.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::Command;
 
 /// Resolve the pkg-config command, honoring meson.override_find_program('pkg-config', ...).
@@ -63,11 +63,185 @@ fn run_pkgconfig(cmd: &str, args: &[&str]) -> Option<std::process::Output> {
 }
 
 /// Try to find a dependency using various methods.
+fn special_dependency(vm: &VM, name: &str, method: &str) -> Option<Object> {
+    let compiler = match vm.globals.get("compiler_c") {
+        Some(Object::Compiler(c)) => Some(c.clone()),
+        _ => None,
+    };
+    let wants_builtin = method == "auto" || method == "builtin";
+    let wants_system = method == "auto" || method == "system";
+    let dependency = |compile_args: Vec<String>, link_args: Vec<String>| {
+        Object::Dependency(DependencyData {
+            name: name.to_string(),
+            found: true,
+            version: String::new(),
+            compile_args,
+            link_args,
+            link_with: Vec::new(),
+            link_whole: Vec::new(),
+            sources: Vec::new(),
+            include_dirs: Vec::new(),
+            dependencies: Vec::new(),
+            variables: HashMap::new(),
+            version_reqs: Vec::new(),
+            is_internal: false,
+            kind: "system".to_string(),
+            config_tool: None,
+        })
+    };
+    let prefix_arg = |header: &str| CallArg {
+        name: Some("prefix".to_string()),
+        value: Object::String(format!("#include <{}>", header)),
+    };
+    let args_arg = |args: &[&str]| CallArg {
+        name: Some("args".to_string()),
+        value: Object::Array(args.iter().map(|a| Object::String(a.to_string())).collect()),
+    };
+
+    match name {
+        "dl" => {
+            if wants_builtin {
+                if let Some(c) = &compiler {
+                    if crate::compilers::check_function(c, "dlopen", &[prefix_arg("dlfcn.h")]) {
+                        return Some(dependency(Vec::new(), Vec::new()));
+                    }
+                }
+            }
+            if wants_system {
+                if let Some(c) = &compiler {
+                    if crate::compilers::check_header(c, "dlfcn.h") {
+                        if let Some(lib) = crate::compilers::find_library(c, "dl", &[]) {
+                            if let Object::Dependency(d) = lib {
+                                return Some(dependency(d.compile_args, d.link_args));
+                            }
+                        }
+                    }
+                }
+            }
+            None
+        }
+        "threads" if wants_system => {
+            let link_args = match compiler.as_ref().map(|c| c.id.as_str()) {
+                Some("gcc") | Some("clang") if !cfg!(target_os = "macos") => {
+                    vec!["-pthread".to_string()]
+                }
+                _ => Vec::new(),
+            };
+            Some(dependency(Vec::new(), link_args))
+        }
+        "iconv" => {
+            if wants_builtin {
+                if let Some(c) = &compiler {
+                    let code =
+                        "#include <iconv.h>\nint main(void) { iconv_open(\"\", \"\"); return 0; }";
+                    if crate::compilers::try_link(c, code, &[]) {
+                        return Some(dependency(Vec::new(), Vec::new()));
+                    }
+                }
+            }
+            if wants_system {
+                if let Some(c) = &compiler {
+                    if crate::compilers::check_header(c, "iconv.h") {
+                        if let Some(Object::Dependency(d)) =
+                            crate::compilers::find_library(c, "iconv", &[])
+                        {
+                            return Some(dependency(d.compile_args, d.link_args));
+                        }
+                    }
+                }
+            }
+            None
+        }
+        "intl" => {
+            if wants_builtin {
+                if let Some(c) = &compiler {
+                    let code = "#include <libintl.h>\nint main(void) { gettext(\"Hello world\"); return 0; }";
+                    if crate::compilers::try_link(c, code, &[]) {
+                        return Some(dependency(Vec::new(), Vec::new()));
+                    }
+                }
+            }
+            if wants_system {
+                if let Some(c) = &compiler {
+                    if crate::compilers::check_header(c, "libintl.h") {
+                        if let Some(Object::Dependency(d)) =
+                            crate::compilers::find_library(c, "intl", &[])
+                        {
+                            return Some(dependency(d.compile_args, d.link_args));
+                        }
+                    }
+                }
+            }
+            None
+        }
+        "openmp" if wants_system => {
+            let c = compiler.as_ref()?;
+            let flags = match c.id.as_str() {
+                "gcc" | "clang" => vec!["-fopenmp".to_string()],
+                _ => return None,
+            };
+            let date = crate::compilers::get_define(c, "_OPENMP", &[args_arg(&["-fopenmp"])]);
+            let version = match date.trim() {
+                "202411" => "6.0",
+                "202111" => "5.2",
+                "202011" => "5.1",
+                "201811" | "201611" => "5.0",
+                "201511" => "4.5",
+                "201307" => "4.0",
+                "201107" => "3.1",
+                "200805" => "3.0",
+                "200505" => "2.5",
+                "200203" => "2.0",
+                "199810" => "1.0",
+                _ => return None,
+            };
+            if !crate::compilers::check_header(c, "omp.h") {
+                return None;
+            }
+            let mut dep = dependency(flags.clone(), flags);
+            if let Object::Dependency(d) = &mut dep {
+                d.version = version.to_string();
+            }
+            Some(dep)
+        }
+        "atomic" => {
+            if wants_builtin {
+                if let Some(c) = &compiler {
+                    if crate::compilers::check_function(
+                        c,
+                        "atomic_flag_clear",
+                        &[prefix_arg("stdatomic.h")],
+                    ) {
+                        return Some(dependency(Vec::new(), Vec::new()));
+                    }
+                }
+            }
+            if wants_system {
+                if let Some(c) = &compiler {
+                    if crate::compilers::check_header(c, "stdatomic.h") {
+                        if let Some(Object::Dependency(d)) =
+                            crate::compilers::find_library(c, "atomic", &[])
+                        {
+                            return Some(dependency(d.compile_args, d.link_args));
+                        }
+                    }
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
 pub fn find_dependency(vm: &mut VM, name: &str, args: &[CallArg]) -> Option<Object> {
     let method = VM::get_arg_str(args, "method", usize::MAX).unwrap_or("auto");
     let version_req = VM::get_arg_str(args, "version", usize::MAX);
     let modules = VM::get_arg_string_array(args, "modules");
     let components = VM::get_arg_string_array(args, "components");
+
+    if let Some(dep) = special_dependency(vm, name, method) {
+        return Some(dep);
+    }
 
     if name == "appleframeworks" {
         let mut link_args = Vec::new();
@@ -88,7 +262,11 @@ pub fn find_dependency(vm: &mut VM, name: &str, args: &[CallArg]) -> Option<Obje
             version_reqs: Vec::new(),
             is_internal: false,
             kind: String::new(),
-        }));
+
+                link_with: Vec::new(),
+                link_whole: Vec::new(),
+                config_tool: None,
+            }));
     }
 
     // Check for internal/declared dependencies first
@@ -103,14 +281,18 @@ pub fn find_dependency(vm: &mut VM, name: &str, args: &[CallArg]) -> Option<Obje
         }
     }
 
+    if name == "llvm" && matches!(method, "auto" | "config-tool") {
+        return find_llvm_config_tool(vm, args, version_req);
+    }
+
     match method {
-        "pkg-config" => find_pkgconfig(vm, name, version_req, &modules),
+        "pkg-config" => find_pkgconfig(vm, name, version_req),
         "cmake" => find_cmake(vm, name, version_req, &components),
         "config-tool" => find_config_tool(name, version_req),
         "system" => find_system_library(name),
         "auto" | _ => {
             // Try methods in order
-            find_pkgconfig(vm, name, version_req, &modules)
+            find_pkgconfig(vm, name, version_req)
                 .or_else(|| find_cmake(vm, name, version_req, &components))
                 .or_else(|| find_config_tool(name, version_req))
                 .or_else(|| find_system_library(name))
@@ -118,17 +300,8 @@ pub fn find_dependency(vm: &mut VM, name: &str, args: &[CallArg]) -> Option<Obje
     }
 }
 
-fn find_pkgconfig(
-    vm: &VM,
-    name: &str,
-    version_req: Option<&str>,
-    modules: &[String],
-) -> Option<Object> {
-    let pkg_name = if modules.is_empty() {
-        name.to_string()
-    } else {
-        modules[0].clone()
-    };
+fn find_pkgconfig(vm: &VM, name: &str, version_req: Option<&str>) -> Option<Object> {
+    let pkg_name = name.to_string();
 
     let pkgconfig_cmd = pkgconfig_command(vm);
     let output = run_pkgconfig(&pkgconfig_cmd, &["--modversion", &pkg_name])?;
@@ -209,7 +382,11 @@ fn find_pkgconfig(
         version_reqs: version_req.map(|req| vec![req.to_string()]).unwrap_or_default(),
         is_internal: false,
         kind: "pkgconfig".to_string(),
-    }))
+
+            link_with: Vec::new(),
+            link_whole: Vec::new(),
+            config_tool: None,
+        }))
 }
 
 fn find_cmake(
@@ -300,7 +477,11 @@ fn find_cmake(
         version_reqs: Vec::new(),
         is_internal: false,
         kind: String::new(),
-    }))
+
+            link_with: Vec::new(),
+            link_whole: Vec::new(),
+            config_tool: None,
+        }))
 }
 
 fn find_config_tool(name: &str, version_req: Option<&str>) -> Option<Object> {
@@ -356,6 +537,143 @@ fn find_config_tool(name: &str, version_req: Option<&str>) -> Option<Object> {
         version_reqs: Vec::new(),
         is_internal: false,
         kind: String::new(),
+        link_with: Vec::new(),
+        link_whole: Vec::new(),
+        config_tool: Some(config_tool),
+    }))
+}
+
+const LLVM_CONFIG_SUFFIXES: &[&str] = &[
+    "", "-23.1", "23.1", "-23", "23", "-22.1", "22.1", "-22", "22", "-21.1", "21.1", "-21", "21",
+    "-20.1", "20.1", "-20", "20", "-19.1", "19.1", "-19", "19", "-18.1", "18.1", "-18", "18",
+    "-17", "17", "-16", "16", "-15", "15", "-14", "14", "-13", "13", "-12", "12", "-11", "11",
+    "-10", "10", "-9", "90", "-8", "80", "-7", "70", "-6.0", "60", "-5.0", "50", "-4.0", "40",
+    "-3.9", "39", "-3.8", "38", "-3.7", "37", "-3.6", "36", "-3.5", "35", "-devel", "-64",
+];
+
+fn find_on_path(program: &str) -> Option<String> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(program))
+        .find(|candidate| candidate.is_file())
+        .map(|candidate| candidate.to_string_lossy().into_owned())
+}
+
+fn llvm_config_words(tool: &str, args: &[&str]) -> Option<Vec<String>> {
+    let output = Command::new(tool).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .map(String::from)
+            .collect(),
+    )
+}
+
+fn find_llvm_config_tool(vm: &VM, args: &[CallArg], version_req: Option<&str>) -> Option<Object> {
+    let tool = LLVM_CONFIG_SUFFIXES
+        .iter()
+        .find_map(|suffix| find_on_path(&format!("llvm-config{suffix}")))?;
+    let version = llvm_config_words(&tool, &["--version"])?.join(" ");
+    if let Some(req) = version_req {
+        if !crate::options::version_compare(&version, req) {
+            return None;
+        }
+    }
+
+    let provided: HashSet<String> = llvm_config_words(&tool, &["--components"])?
+        .into_iter()
+        .collect();
+    let sorted_unique = |modules: Vec<String>| -> Vec<String> {
+        let mut modules = modules;
+        modules.sort();
+        modules.dedup();
+        modules
+    };
+    let mut modules = Vec::new();
+    for module in sorted_unique(VM::get_arg_string_array(args, "modules")) {
+        if !provided.contains(&module) {
+            return None;
+        }
+        modules.push(module);
+    }
+    for module in sorted_unique(VM::get_arg_string_array(args, "optional_modules")) {
+        if provided.contains(&module) && !modules.contains(&module) {
+            modules.push(module);
+        }
+    }
+
+    let compile_args: Vec<String> = llvm_config_words(&tool, &["--cppflags"])?
+        .into_iter()
+        .filter(|arg| arg != "-DNDEBUG")
+        .collect();
+
+    let static_link = VM::get_arg_bool(args, "static", false);
+    let shared_mode = llvm_config_words(&tool, &["--shared-mode"])?
+        .into_iter()
+        .next()?;
+    let link_args = if !static_link
+        && shared_mode == "static"
+        && llvm_config_words(&tool, &["--libfiles", "--link-shared"]).is_none()
+    {
+        let libdir = llvm_config_words(&tool, &["--libdir"])?
+            .into_iter()
+            .next()?;
+        let mut shared_libs: Vec<String> = std::fs::read_dir(&libdir)
+            .ok()?
+            .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+            .filter(|file| file.starts_with("libLLVM") && file.ends_with(".so"))
+            .collect();
+        shared_libs.sort();
+        let library = shared_libs.first()?;
+        let mut link_args = llvm_config_words(&tool, &["--ldflags"])?;
+        link_args.push(format!(
+            "-l{}",
+            &library["lib".len()..library.len() - ".so".len()]
+        ));
+        link_args
+    } else {
+        if static_link && shared_mode == "shared" {
+            llvm_config_words(&tool, &["--libfiles", "--link-static"])?;
+        }
+        let mut query = vec!["--libs", "--ldflags"];
+        if static_link {
+            query.extend(["--link-static", "--system-libs"]);
+        } else {
+            query.push("--link-shared");
+        }
+        query.extend(modules.iter().map(String::as_str));
+        llvm_config_words(&tool, &query)?
+            .into_iter()
+            .map(|arg| match arg.strip_prefix("-l") {
+                Some(path) if arg.ends_with(".so") => path.to_string(),
+                _ => arg,
+            })
+            .collect()
+    };
+
+    let dependencies: Vec<Object> = special_dependency(vm, "threads", "auto")
+        .into_iter()
+        .collect();
+
+    Some(Object::Dependency(DependencyData {
+        name: "llvm".to_string(),
+        found: true,
+        version,
+        compile_args,
+        link_args,
+        link_with: Vec::new(),
+        link_whole: Vec::new(),
+        sources: Vec::new(),
+        include_dirs: Vec::new(),
+        dependencies,
+        variables: HashMap::new(),
+        version_reqs: Vec::new(),
+        is_internal: false,
+        kind: "config-tool".to_string(),
+        config_tool: Some(tool),
     }))
 }
 
@@ -381,7 +699,11 @@ fn find_system_library(name: &str) -> Option<Object> {
             version_reqs: Vec::new(),
             is_internal: false,
             kind: String::new(),
-        })),
+
+                link_with: Vec::new(),
+                link_whole: Vec::new(),
+                config_tool: None,
+            })),
         _ => None,
     }
 }

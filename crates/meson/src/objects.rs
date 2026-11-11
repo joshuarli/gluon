@@ -235,6 +235,8 @@ pub struct DependencyData {
     pub version: String,
     pub compile_args: Vec<String>,
     pub link_args: Vec<String>,
+    pub link_with: Vec<Object>,
+    pub link_whole: Vec<Object>,
     pub sources: Vec<String>,
     pub include_dirs: Vec<String>,
     pub dependencies: Vec<Object>,
@@ -244,6 +246,7 @@ pub struct DependencyData {
     /// Origin kind: "" (pkgconfig), "library" (compiler.find_library),
     /// "internal", "system", etc. Used by type_name().
     pub kind: String,
+    pub config_tool: Option<String>,
 }
 
 impl DependencyData {
@@ -254,6 +257,8 @@ impl DependencyData {
             version: String::new(),
             compile_args: Vec::new(),
             link_args: Vec::new(),
+            link_with: Vec::new(),
+            link_whole: Vec::new(),
             sources: Vec::new(),
             include_dirs: Vec::new(),
             dependencies: Vec::new(),
@@ -261,6 +266,7 @@ impl DependencyData {
             version_reqs: Vec::new(),
             is_internal: false,
             kind: String::new(),
+            config_tool: None,
         }
     }
 }

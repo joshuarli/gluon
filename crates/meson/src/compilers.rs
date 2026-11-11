@@ -38,20 +38,36 @@ pub fn detect_compiler(vm: &mut VM, language: &str) -> bool {
         _ => return false,
     };
 
-    for (cmd, compiler_id) in candidates {
+    let from_env = compiler_env_var(language)
+        .and_then(|var| std::env::var(var).ok())
+        .map(|value| crate::cli::split_command(&value))
+        .filter(|words| !words.is_empty());
+    let candidates: Vec<(Vec<String>, &str)> = match from_env {
+        Some(words) => {
+            let id = candidates.first().map(|(_, id)| *id).unwrap_or("gcc");
+            vec![(words, id)]
+        }
+        None => candidates
+            .into_iter()
+            .map(|(cmd, id)| (vec![cmd.to_string()], id))
+            .collect(),
+    };
+
+    for (cmd_words, guessed_id) in candidates {
+        let cmd = cmd_words[0].as_str();
         let compiler_id = if matches!(language, "c" | "cpp" | "c++" | "objc" | "objcpp")
-            && compiler_id == "gcc"
+            && guessed_id == "gcc"
         {
             detect_c_family_id(cmd)
         } else {
-            compiler_id
+            guessed_id
         };
         if let Some(version) = get_compiler_version(cmd, compiler_id) {
             let compiler = CompilerData {
                 id: compiler_id.to_string(),
                 language: language.to_string(),
                 version: version.clone(),
-                cmd: vec![cmd.to_string()],
+                cmd: cmd_words.clone(),
                 linker_id: detect_linker(cmd, compiler_id),
                 full_version: version,
             };
@@ -71,6 +87,20 @@ pub fn detect_compiler(vm: &mut VM, language: &str) -> bool {
         }
     }
     false
+}
+
+fn compiler_env_var(language: &str) -> Option<&'static str> {
+    match language {
+        "c" => Some("CC"),
+        "cpp" | "c++" => Some("CXX"),
+        "objc" => Some("OBJC"),
+        "objcpp" => Some("OBJCXX"),
+        "rust" => Some("RUSTC"),
+        "fortran" => Some("FC"),
+        "d" => Some("DC"),
+        "vala" => Some("VALAC"),
+        _ => None,
+    }
 }
 
 fn detect_c_family_id(cmd: &str) -> &'static str {
@@ -202,6 +232,60 @@ pub fn check_header_symbol(
         }
     }
     false
+}
+
+pub fn first_supported_std(compiler: &CompilerData, list: &str) -> Result<String, String> {
+    if !list.contains(',') {
+        return Ok(list.to_string());
+    }
+    for candidate in list.split(',').map(str::trim).filter(|c| !c.is_empty()) {
+        if candidate == "none"
+            || try_compile_code(
+                compiler,
+                "int main(void) { return 0; }\n",
+                &[format!("-std={candidate}")],
+            )
+        {
+            return Ok(candidate.to_string());
+        }
+    }
+    Err(format!(
+        "None of values {list} are supported by the {} compiler",
+        compiler.language.to_uppercase()
+    ))
+}
+
+struct ProbeDir(std::path::PathBuf);
+
+impl ProbeDir {
+    fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("gluon-probe-{}-{}", std::process::id(), n));
+        std::fs::create_dir(&dir).unwrap_or_else(|e| {
+            panic!(
+                "cannot create compiler probe directory {}: {e}",
+                dir.display()
+            )
+        });
+        Self(dir)
+    }
+
+    fn path(&self, name: impl AsRef<std::path::Path>) -> std::path::PathBuf {
+        self.0.join(name)
+    }
+}
+
+impl Drop for ProbeDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn compiler_command(compiler: &CompilerData) -> Command {
+    let mut command = Command::new(&compiler.cmd[0]);
+    command.args(&compiler.cmd[1..]);
+    command
 }
 
 /// Check if a function exists
@@ -525,7 +609,11 @@ pub fn find_library(compiler: &CompilerData, name: &str, dirs: &[String]) -> Opt
                         version_reqs: Vec::new(),
                         is_internal: false,
                         kind: "library".to_string(),
-                    }));
+
+                            link_with: Vec::new(),
+                            link_whole: Vec::new(),
+                            config_tool: None,
+                        }));
                 }
             }
         }
@@ -550,7 +638,11 @@ pub fn find_library(compiler: &CompilerData, name: &str, dirs: &[String]) -> Opt
             version_reqs: Vec::new(),
             is_internal: false,
             kind: "library".to_string(),
-        }))
+
+                link_with: Vec::new(),
+                link_whole: Vec::new(),
+                config_tool: None,
+            }))
     } else {
         None
     }
@@ -701,13 +793,13 @@ fn try_preprocess_code(
     code: &str,
     extra_args: &[String],
 ) -> Option<String> {
-    let tmpdir = std::env::temp_dir();
+    let tmpdir = ProbeDir::new();
     let suffix = get_source_suffix(compiler);
-    let src_path = tmpdir.join(format!("meson_preprocess{}", suffix));
+    let src_path = tmpdir.path(format!("meson_preprocess{}", suffix));
 
     std::fs::write(&src_path, code).ok()?;
 
-    let mut cmd = Command::new(&compiler.cmd[0]);
+    let mut cmd = compiler_command(compiler);
     cmd.arg("-E").arg("-P").arg("-w").arg(&src_path);
     for arg in extra_args {
         cmd.arg(arg);
@@ -749,16 +841,16 @@ fn get_source_suffix(compiler: &CompilerData) -> &str {
 }
 
 fn try_compile_code(compiler: &CompilerData, code: &str, extra_args: &[String]) -> bool {
-    let tmpdir = std::env::temp_dir();
+    let tmpdir = ProbeDir::new();
     let suffix = get_source_suffix(compiler);
-    let src_path = tmpdir.join(format!("meson_test{}", suffix));
-    let obj_path = tmpdir.join("meson_test.o");
+    let src_path = tmpdir.path(format!("meson_test{}", suffix));
+    let obj_path = tmpdir.path("meson_test.o");
 
     if std::fs::write(&src_path, code).is_err() {
         return false;
     }
 
-    let mut cmd = Command::new(&compiler.cmd[0]);
+    let mut cmd = compiler_command(compiler);
     cmd.arg("-c").arg(&src_path).arg("-o").arg(&obj_path);
     let has_werror = extra_args.iter().any(|a| a == "-Werror");
     if !has_werror {
@@ -785,16 +877,16 @@ fn try_link_code_with_args(
     compile_args: &[String],
     link_args: &[String],
 ) -> bool {
-    let tmpdir = std::env::temp_dir();
+    let tmpdir = ProbeDir::new();
     let suffix = get_source_suffix(compiler);
-    let src_path = tmpdir.join(format!("meson_test{}", suffix));
-    let exe_path = tmpdir.join("meson_test_exe");
+    let src_path = tmpdir.path(format!("meson_test{}", suffix));
+    let exe_path = tmpdir.path("meson_test_exe");
 
     if std::fs::write(&src_path, code).is_err() {
         return false;
     }
 
-    let mut cmd = Command::new(&compiler.cmd[0]);
+    let mut cmd = compiler_command(compiler);
     cmd.arg(&src_path).arg("-o").arg(&exe_path);
     let has_werror = compile_args
         .iter()
@@ -833,15 +925,15 @@ fn try_run_code_werror(
     args: &[CallArg],
     werror: bool,
 ) -> Option<String> {
-    let tmpdir = std::env::temp_dir();
+    let tmpdir = ProbeDir::new();
     let suffix = get_source_suffix(compiler);
-    let src_path = tmpdir.join(format!("meson_test{}", suffix));
-    let exe_path = tmpdir.join("meson_test_exe");
+    let src_path = tmpdir.path(format!("meson_test{}", suffix));
+    let exe_path = tmpdir.path("meson_test_exe");
 
     std::fs::write(&src_path, code).ok()?;
 
     let extra = extra_args_from_callargs(args);
-    let mut cmd = Command::new(&compiler.cmd[0]);
+    let mut cmd = compiler_command(compiler);
     cmd.arg(&src_path).arg("-o").arg(&exe_path);
     let has_werror = werror || extra.iter().any(|a| a == "-Werror");
     if has_werror {
@@ -867,5 +959,57 @@ fn try_run_code_werror(
         Some(String::from_utf8_lossy(&run_output.stdout).to_string())
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+
+    fn host_cc() -> CompilerData {
+        CompilerData {
+            id: "gcc".into(),
+            language: "c".into(),
+            version: String::new(),
+            cmd: vec!["cc".into()],
+            linker_id: String::new(),
+            full_version: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_standard_fallback_list_picks_the_first_supported_entry() {
+        let cc = host_cc();
+        assert_eq!(first_supported_std(&cc, "c11").unwrap(), "c11");
+        assert_eq!(
+            first_supported_std(&cc, "gnu-no-such-std,c11,c99").unwrap(),
+            "c11"
+        );
+        assert!(first_supported_std(&cc, "no-such-a,no-such-b").is_err());
+    }
+
+    #[test]
+    fn concurrent_header_probes_answer_for_their_own_source() {
+        let cc = host_cc();
+        let threads: Vec<_> = (0..16)
+            .map(|i| {
+                let cc = cc.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..10 {
+                        if i % 2 == 0 {
+                            assert!(check_header(&cc, "stdio.h"), "stdio.h must be found");
+                        } else {
+                            assert!(
+                                !check_header(&cc, "gluon/no-such-header.h"),
+                                "a missing header must not be found"
+                            );
+                        }
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
     }
 }

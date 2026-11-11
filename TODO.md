@@ -1,7 +1,7 @@
 # TODO
 
 Prefix: GLU
-Next: 27
+Next: 28
 
 ### GLU-19 · P3 · shared libraries have no symbol-extractor edge
 - **Area:** meson
@@ -14,7 +14,7 @@ Next: 27
 ### GLU-20 · P3 · install accepts options it does not apply
 - **Area:** meson
 - **Where:** `crates/meson/src/cli.rs`, `crates/meson/src/install.rs`
-- **Problem:** `meson install --tags`, `--skip-subprojects` and `--strip` (and the `strip` option) are parsed and silently ignored, and a target's `install_mode` and `configure_file`'s `install_mode` never reach the install plan, so those installs get default modes.
+- **Problem:** `meson install --tags` and `--skip-subprojects` are parsed and silently ignored, and `configure_file`'s `install_mode` never reaches the install plan, so those installs get default modes.
 - **Recommendation:** Apply each as Meson 1.12.1's `minstall.py` does, or reject it with an error until it is implemented.
 - **Fix with:** reference-parity
 - **Effort:** S
@@ -27,19 +27,19 @@ Next: 27
 - **Fix with:** reference-parity
 - **Effort:** S
 
-### GLU-22 · P3 · install does not rewrite dependent load paths or build rpaths
+### GLU-22 · P3 · install does not rewrite dependent load paths
 - **Area:** meson
 - **Where:** `crates/meson/src/install.rs`
-- **Problem:** `install_name_tool -id` is now applied to installed dylibs, but Meson also runs `install_name_tool -change` from `get_link_deps_mapping()` for build targets the library links, and rewrites ELF rpaths (removing build rpaths, adding `install_rpath`) in `depfixer.fix_rpath()`. A library that links another target of the same project keeps the build-tree install name after install.
-- **Recommendation:** Pass the linked targets' install-name mappings to `install_name_tool`, and apply the ELF rpath edit on Linux.
+- **Problem:** ELF RPATH/RUNPATH is rewritten in process and `install_name_tool -id` is applied to installed dylibs, but Meson also runs `install_name_tool -change` from `get_link_deps_mapping()` for build targets the library links. A macOS library that links another target of the same project keeps the build-tree install name after install.
+- **Recommendation:** Pass the linked targets' install-name mappings to `install_name_tool`.
 - **Fix with:** reference-parity
 - **Effort:** M
 
-### GLU-23 · P3 · pkgconfig ignores library targets in requires and link_with on internal deps
+### GLU-23 · P3 · pkgconfig ignores library targets in requires
 - **Area:** meson
-- **Where:** `crates/meson/src/modules/pkgconfig.rs`, `crates/meson/src/builtins/functions.rs`
-- **Problem:** Meson maps a library target passed to `requires`/`requires_private` to the `filebase` of the `.pc` generated for it (and errors otherwise). gluon only handles strings and dependency objects, silently dropping library objects. `declare_dependency()` also does not record `link_with`/`link_whole`, so an internal dependency contributes only its `dependencies:` to `Libs`/`Libs.private` and its `Requires`.
-- **Recommendation:** Track generated `.pc` metadata per target id, and store `link_with`/`link_whole`/`objects` on internal dependencies so `DependenciesHelper` can recurse as Meson does.
+- **Where:** `crates/meson/src/modules/pkgconfig.rs`
+- **Problem:** Meson maps a library target passed to `requires`/`requires_private` to the `filebase` of the `.pc` generated for it (and errors otherwise). gluon only handles strings and dependency objects, silently dropping library objects.
+- **Recommendation:** Track generated `.pc` metadata per target id so `DependenciesHelper` can recurse as Meson does.
 - **Fix with:** reference-parity
 - **Effort:** M
 
@@ -50,6 +50,14 @@ Next: 27
 - **Recommendation:** Record the uninstalled include directories while processing the dependency graph, as `DependenciesHelper._add_uninstalled_incdirs` does.
 - **Fix with:** reference-parity
 - **Effort:** S
+
+### GLU-27 · P2 · install and postconf scripts are silently skipped
+- **Area:** meson
+- **Where:** `crates/meson/src/builtins/methods.rs` (`meson.add_install_script`, `add_postconf_script`, `add_dist_script` map to `meson_noop`)
+- **Problem:** A project whose install relies on `meson.add_install_script` gets a tree missing whatever the script would have written, and setup still succeeds. Meson runs install scripts with `MESON_INSTALL_PREFIX`, `MESON_INSTALL_DESTDIR_PREFIX` and the other documented variables after files are installed, and postconf scripts after setup.
+- **Recommendation:** Record install scripts and run them from `meson install` with Meson's environment, run postconf scripts at the end of setup, and fail on a script Gluon cannot run rather than skip it. Add a fixture compared with reference Meson.
+- **Fix with:** reference-parity
+- **Effort:** M
 
 ### GLU-26 · P3 · find_library with dirs skips the link check and system directories
 - **Area:** meson

@@ -380,10 +380,10 @@ fn argument_objects(args: &[CallArg], name: &str) -> Vec<Object> {
     }
 }
 
-fn parse_variables(value: Option<&Object>) -> Vec<(String, String)> {
+fn parse_variables(value: Option<&Object>) -> Result<Vec<(String, String)>, String> {
     let mut variables = Vec::new();
     let Some(value) = value else {
-        return variables;
+        return Ok(variables);
     };
     match value {
         Object::Dict(entries) => {
@@ -393,21 +393,27 @@ fn parse_variables(value: Option<&Object>) -> Vec<(String, String)> {
         }
         Object::Array(items) => {
             for item in items {
-                if let Object::String(text) = item {
-                    if let Some((key, value)) = text.split_once('=') {
-                        variables.push((key.trim().to_string(), value.trim().to_string()));
-                    }
+                match item {
+                    Object::String(text) => variables.push(parse_variable_entry(text)?),
+                    other => variables.push(parse_variable_entry(&other.to_string_value())?),
                 }
             }
         }
-        Object::String(text) => {
-            if let Some((key, value)) = text.split_once('=') {
-                variables.push((key.trim().to_string(), value.trim().to_string()));
-            }
+        Object::String(text) => variables.push(parse_variable_entry(text)?),
+        other => {
+            return Err(format!(
+                "pkgconfig variables must be a dict or a list of strings, not {}",
+                other.type_name()
+            ))
         }
-        _ => {}
     }
-    variables
+    Ok(variables)
+}
+
+fn parse_variable_entry(text: &str) -> Result<(String, String), String> {
+    text.split_once('=')
+        .map(|(key, value)| (key.trim().to_string(), value.trim().to_string()))
+        .ok_or_else(|| format!("pkgconfig variable '{text}' is not of the form name=value"))
 }
 
 fn directory_value(options: &HashMap<String, Object>, name: &str) -> String {
@@ -637,7 +643,10 @@ fn pkgconfig_generate(vm: &mut VM, _obj: &Object, args: &[CallArg]) -> Result<Ob
         .iter()
         .map(|value| value.to_string_value())
         .collect();
-    let variables = parse_variables(VM::get_arg_value(args, "variables"));
+    let variables = match parse_variables(VM::get_arg_value(args, "variables")) {
+        Ok(variables) => variables,
+        Err(e) => return Err(e),
+    };
 
     let mut libraries = argument_objects(args, "libraries");
     if let Some(target) = &mainlib {

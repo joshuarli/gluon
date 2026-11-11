@@ -64,17 +64,34 @@ fn python_find_installation(
                     .unwrap_or(&version_str)
                     .to_string();
 
-                // Check required modules if specified
+                // Check required modules if specified. A missing module makes
+                // the installation not found when required is false, and an
+                // error when required is true.
                 if !modules.is_empty() {
+                    let mut missing = Vec::new();
                     for module in &modules {
                         let check = std::process::Command::new(candidate)
                             .args(["-c", &format!("import {}", module)])
                             .output();
-                        if let Ok(out) = check {
-                            if !out.status.success() && required {
-                                return Err(format!("Python module '{}' not found", module));
-                            }
+                        let present = matches!(check, Ok(ref out) if out.status.success());
+                        if !present {
+                            missing.push(module.clone());
                         }
+                    }
+                    if !missing.is_empty() {
+                        if required {
+                            return Err(format!(
+                                "Python installation '{}' is missing modules: {}",
+                                candidate,
+                                missing.join(", ")
+                            ));
+                        }
+                        return Ok(Object::ExternalProgram(ExternalProgramData {
+                            name: candidate.to_string(),
+                            path: String::new(),
+                            found: false,
+                            version: None,
+                        }));
                     }
                 }
 
@@ -158,6 +175,7 @@ fn python_extension_module(vm: &mut VM, _obj: &Object, args: &[CallArg]) -> Resu
         link_with: Vec::new(),
         link_whole: Vec::new(),
         link_args: Vec::new(),
+        link_depends: Vec::new(),
         c_args: Vec::new(),
         cpp_args: Vec::new(),
         objc_args: Vec::new(),
@@ -165,6 +183,7 @@ fn python_extension_module(vm: &mut VM, _obj: &Object, args: &[CallArg]) -> Resu
         rust_args: Vec::new(),
         install,
         install_dir,
+        install_mode: None,
         install_rpath: String::new(),
         build_rpath: String::new(),
         pic: Some(true),

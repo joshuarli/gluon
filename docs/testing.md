@@ -19,6 +19,11 @@ Gates, narrowest first:
 - `cargo test --workspace` — unit/integration suites for all crates.
 - `tests/differential/run.sh` — the fixture corpus; exit 0 only with the
   ledger honored.
+- `tests/install/run.sh` — focused install fixtures (versioned shared
+  library, an executable linked against it, headers in a subdir, pkgconfig)
+  installed with reference Meson and with gluon; installed trees and
+  RPATH/RUNPATH must match, without rpath, with `install_rpath` and with a
+  build-only `build_rpath`.
 - `tests/upstream/musl.sh` — static-musl bins via Docker (pinned
   `rust:nightly-2026-09-15`, `--platform linux/amd64`, `x86_64-unknown-linux-musl`) that
   run `--version` in the container. CI builds the same target directly with
