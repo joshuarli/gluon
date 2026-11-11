@@ -4,6 +4,141 @@ use crate::objects::{FeatureState, Object};
 /// cross/native files, and version comparison.
 use std::collections::HashMap;
 
+const BUILTIN_OPTION_KEYS: &[&str] = &[
+    "prefix",
+    "bindir",
+    "datadir",
+    "includedir",
+    "infodir",
+    "libdir",
+    "licensedir",
+    "libexecdir",
+    "localedir",
+    "localstatedir",
+    "mandir",
+    "sbindir",
+    "sharedstatedir",
+    "sysconfdir",
+    "auto_features",
+    "backend",
+    "genvslite",
+    "buildtype",
+    "debug",
+    "default_library",
+    "default_both_libraries",
+    "errorlogs",
+    "install_umask",
+    "layout",
+    "namingscheme",
+    "optimization",
+    "prefer_static",
+    "stdsplit",
+    "strip",
+    "unity",
+    "unity_size",
+    "warning_level",
+    "werror",
+    "wrap_mode",
+    "force_fallback_for",
+    "vsenv",
+    "os2_emxomf",
+    "pkgconfig.relocatable",
+    "python.bytecompile",
+    "python.install_env",
+    "python.platlibdir",
+    "python.purelibdir",
+    "python.allow_limited_api",
+    "python.build_config",
+    "pkg_config_path",
+    "build.pkg_config_path",
+    "cmake_prefix_path",
+    "build.cmake_prefix_path",
+];
+
+pub fn builtin_option_key(flag: &str) -> Option<String> {
+    let key = if flag == "warnlevel" {
+        "warning_level".to_string()
+    } else {
+        flag.replace('-', "_")
+    };
+    if BUILTIN_OPTION_KEYS.contains(&key.as_str()) {
+        Some(key)
+    } else {
+        None
+    }
+}
+
+fn builtin_option_kind(key: &str) -> &'static str {
+    match key {
+        "debug" | "errorlogs" | "prefer_static" | "stdsplit" | "strip" | "werror" | "vsenv"
+        | "os2_emxomf" | "pkgconfig.relocatable" | "python.allow_limited_api" => "bool",
+        "unity_size" | "python.bytecompile" => "integer",
+        "force_fallback_for" | "pkg_config_path" | "build.pkg_config_path"
+        | "cmake_prefix_path" | "build.cmake_prefix_path" => "array",
+        _ => "string",
+    }
+}
+
+pub fn builtin_option_is_boolean(key: &str) -> bool {
+    builtin_option_kind(key) == "bool"
+}
+
+pub fn parse_builtin_option_value(key: &str, value: &str) -> Object {
+    match builtin_option_kind(key) {
+        "bool" => Object::Bool(value == "true" || value == "1"),
+        "integer" => value
+            .parse::<i64>()
+            .map(Object::Int)
+            .unwrap_or(Object::Int(0)),
+        "array" => Object::Array(
+            value
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| Object::String(s.to_string()))
+                .collect(),
+        ),
+        _ => Object::String(value.to_string()),
+    }
+}
+
+pub fn buildtype_dependents(buildtype: &str) -> Option<(&'static str, bool)> {
+    match buildtype {
+        "plain" => Some(("plain", false)),
+        "debug" => Some(("0", true)),
+        "debugoptimized" => Some(("2", true)),
+        "release" => Some(("3", false)),
+        "minsize" => Some(("s", true)),
+        _ => None,
+    }
+}
+
+pub fn effective_optimization(options: &HashMap<String, Object>) -> String {
+    if let Some(value) = options.get("optimization") {
+        if let Object::String(s) = value {
+            return s.clone();
+        }
+    }
+    if let Some(Object::String(buildtype)) = options.get("buildtype") {
+        if let Some((optimization, _)) = buildtype_dependents(buildtype) {
+            return optimization.to_string();
+        }
+    }
+    "0".to_string()
+}
+
+pub fn effective_debug(options: &HashMap<String, Object>) -> bool {
+    if let Some(Object::Bool(debug)) = options.get("debug") {
+        return *debug;
+    }
+    if let Some(Object::String(buildtype)) = options.get("buildtype") {
+        if let Some((_, debug)) = buildtype_dependents(buildtype) {
+            return debug;
+        }
+    }
+    true
+}
+
 /// Parse a value string into an Object
 pub fn parse_option_value(value: &str) -> Object {
     match value {

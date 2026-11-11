@@ -33,6 +33,7 @@ enum CliCommand {
     Format(FormatArgs),
     Help,
     Version,
+    Error(i32, String),
 }
 
 struct SetupArgs {
@@ -184,26 +185,23 @@ impl Cli {
                 if i < args.len() {
                     cross_file = Some(args[i].clone());
                 }
+            } else if let Some(value) = arg.strip_prefix("--cross-file=") {
+                cross_file = Some(value.to_string());
             } else if arg == "--native-file" {
                 i += 1;
                 if i < args.len() {
                     native_file = Some(args[i].clone());
                 }
+            } else if let Some(value) = arg.strip_prefix("--native-file=") {
+                native_file = Some(value.to_string());
             } else if arg == "--reconfigure" {
                 reconfigure = true;
             } else if arg == "--wipe" {
                 wipe = true;
             } else if arg.starts_with("--") {
-                // --prefix=, --buildtype=, --default-library=, --libdir= etc: accept
-                // and ignore (install layout handled by caller staging, OD-4).
-                if !arg.contains('=') {
-                    // --flag value form: consume next arg if it looks like a value
-                    // (not another flag) to avoid treating it as positional dir.
-                    if let Some(next) = args.get(i + 1) {
-                        if !next.starts_with("-") {
-                            i += 1;
-                        }
-                    }
+                match parse_builtin_cli_option(args, &mut i) {
+                    Ok(option) => cli_options.push(option),
+                    Err(message) => return CliCommand::Error(2, message),
                 }
             } else {
                 positionals.push(arg.clone());
@@ -256,6 +254,11 @@ impl Cli {
                 let opt = &arg[2..];
                 if let Some(eq) = opt.find('=') {
                     cli_options.push((opt[..eq].to_string(), opt[eq + 1..].to_string()));
+                }
+            } else if arg.starts_with("--") {
+                match parse_builtin_cli_option(args, &mut i) {
+                    Ok(option) => cli_options.push(option),
+                    Err(message) => return CliCommand::Error(2, message),
                 }
             } else {
                 build_dir = arg.clone();
@@ -632,6 +635,10 @@ impl Cli {
                 self.print_help();
                 0
             }
+            CliCommand::Error(code, message) => {
+                eprintln!("meson: error: {}", message);
+                *code
+            }
         }
     }
 
@@ -803,6 +810,7 @@ impl Cli {
         let project = interp.vm.project.clone().unwrap_or_default();
 
         // Generate build.ninja
+        interp.vm.build_data.options = interp.vm.options.clone();
         let backend = NinjaBackend::new(&source_dir, &build_dir);
         let ninja = match backend.generate(&interp.vm.build_data, &project) {
             Ok(n) => n,
@@ -1415,6 +1423,30 @@ mod tests {
         let code = test_cli(dir.to_str().unwrap(), true).run();
         assert_ne!(code, 0);
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+fn parse_builtin_cli_option(
+    args: &[String],
+    i: &mut usize,
+) -> Result<(String, String), String> {
+    let arg = &args[*i];
+    let rest = arg.trim_start_matches("--");
+    if let Some((flag, value)) = rest.split_once('=') {
+        let key = options::builtin_option_key(flag)
+            .ok_or_else(|| format!("unrecognized arguments: {}", arg))?;
+        Ok((key, value.to_string()))
+    } else {
+        let key = options::builtin_option_key(rest)
+            .ok_or_else(|| format!("unrecognized arguments: {}", arg))?;
+        if options::builtin_option_is_boolean(&key) {
+            Ok((key, "true".to_string()))
+        } else if let Some(next) = args.get(*i + 1) {
+            *i += 1;
+            Ok((key, next.clone()))
+        } else {
+            Err(format!("argument {}: expected one argument", arg))
+        }
     }
 }
 

@@ -38,7 +38,7 @@ impl NinjaBackend {
         writeln!(out).unwrap();
 
         // Rules
-        self.write_rules(&mut out, project)?;
+        self.write_rules(&mut out, project, build_data)?;
 
         // Build edges for each target
         for target in &build_data.targets {
@@ -70,7 +70,12 @@ impl NinjaBackend {
         Ok(out)
     }
 
-    fn write_rules(&self, out: &mut String, project: &ProjectInfo) -> Result<(), String> {
+    fn write_rules(
+        &self,
+        out: &mut String,
+        project: &ProjectInfo,
+        build_data: &BuildData,
+    ) -> Result<(), String> {
         // C compiler rule
         if project.languages.iter().any(|l| l == "c" || l == "objc") {
             writeln!(out, "rule c_COMPILER").unwrap();
@@ -82,6 +87,34 @@ impl NinjaBackend {
             writeln!(out, "  deps = gcc").unwrap();
             writeln!(out, "  depfile = $DEPFILE").unwrap();
             writeln!(out, "  description = Compiling C object $out").unwrap();
+            writeln!(out).unwrap();
+        }
+
+        let has_objc_sources = build_data
+            .targets
+            .iter()
+            .any(|t| t.sources.iter().any(|s| s.ends_with(".m") || s.ends_with(".mm")));
+        if project.languages.iter().any(|l| l == "objc") || has_objc_sources {
+            writeln!(out, "rule objc_COMPILER").unwrap();
+            writeln!(
+                out,
+                "  command = clang $ARGS -MD -MQ $out -MF $DEPFILE -o $out -c $in"
+            )
+            .unwrap();
+            writeln!(out, "  deps = gcc").unwrap();
+            writeln!(out, "  depfile = $DEPFILE").unwrap();
+            writeln!(out, "  description = Compiling Objective-C object $out").unwrap();
+            writeln!(out).unwrap();
+
+            writeln!(out, "rule objcpp_COMPILER").unwrap();
+            writeln!(
+                out,
+                "  command = clang++ $ARGS -MD -MQ $out -MF $DEPFILE -o $out -c $in"
+            )
+            .unwrap();
+            writeln!(out, "  deps = gcc").unwrap();
+            writeln!(out, "  depfile = $DEPFILE").unwrap();
+            writeln!(out, "  description = Compiling Objective-C++ object $out").unwrap();
             writeln!(out).unwrap();
         }
 
@@ -195,6 +228,7 @@ impl NinjaBackend {
         target: &BuildTarget,
         build_data: &BuildData,
     ) -> Result<(), String> {
+        let options = &build_data.options;
         let target_dir = if target.subdir.is_empty() {
             String::new()
         } else {
@@ -263,18 +297,100 @@ impl NinjaBackend {
             }
 
             // Language-specific args (per-file)
-            if file_lang == "c" && !build_data.c_std.is_empty() && build_data.c_std != "none" {
-                args.push(format!("-std={}", build_data.c_std));
+            let compiler_id = build_data
+                .compiler_ids
+                .get(&file_lang)
+                .or_else(|| build_data.compiler_ids.get("c"))
+                .map(|s| s.as_str())
+                .unwrap_or("gcc");
+            let gnu_like = compiler_id == "clang" || compiler_id == "gcc";
+            if gnu_like && matches!(file_lang.as_str(), "c" | "cpp" | "objc" | "objcpp") {
+                let visibility = match target.gnu_symbol_visibility.as_str() {
+                    "default" => "-fvisibility=default",
+                    "internal" => "-fvisibility=internal",
+                    "hidden" => "-fvisibility=hidden",
+                    "protected" => "-fvisibility=protected",
+                    _ => "",
+                };
+                if !visibility.is_empty() {
+                    args.push(visibility.to_string());
+                }
+                if target.gnu_symbol_visibility == "inlineshidden" {
+                    args.push("-fvisibility-inlines-hidden".to_string());
+                }
+                match option_string(options, "b_colorout", "always").as_str() {
+                    "auto" => args.push("-fdiagnostics-color=auto".to_string()),
+                    "never" => args.push("-fdiagnostics-color=never".to_string()),
+                    _ => args.push("-fdiagnostics-color=always".to_string()),
+                }
+                let warning_level = option_string(options, "warning_level", "1");
+                match warning_level.as_str() {
+                    "0" => {}
+                    "everything" if compiler_id == "clang" => {
+                        args.push("-Weverything".to_string())
+                    }
+                    "everything" => {
+                        args.push("-Wall".to_string());
+                        args.push("-Wextra".to_string());
+                        args.push("-Wpedantic".to_string());
+                    }
+                    "3" => {
+                        args.push("-Wall".to_string());
+                        args.push("-Winvalid-pch".to_string());
+                        args.push("-Wextra".to_string());
+                        args.push("-Wpedantic".to_string());
+                    }
+                    "2" => {
+                        args.push("-Wall".to_string());
+                        args.push("-Winvalid-pch".to_string());
+                        args.push("-Wextra".to_string());
+                    }
+                    _ => {
+                        args.push("-Wall".to_string());
+                        args.push("-Winvalid-pch".to_string());
+                    }
+                }
+                if option_bool(options, "werror", false) {
+                    args.push("-Werror".to_string());
+                }
             }
-            if file_lang == "cpp" && !build_data.cpp_std.is_empty() && build_data.cpp_std != "none" {
-                args.push(format!("-std={}", build_data.cpp_std));
+
+            let std = match file_lang.as_str() {
+                "c" | "objc" => build_data.c_std.clone(),
+                "cpp" | "objcpp" => build_data.cpp_std.clone(),
+                _ => String::new(),
+            };
+            if !std.is_empty() && std != "none" {
+                args.push(format!("-std={}", std));
             }
-            match file_lang.as_str() {
-                "c" => args.extend(target.c_args.iter().cloned()),
-                "cpp" => args.extend(target.cpp_args.iter().cloned()),
-                "rust" => args.extend(target.rust_args.iter().cloned()),
-                _ => {}
+            if matches!(file_lang.as_str(), "c" | "cpp" | "objc" | "objcpp") {
+                match crate::options::effective_optimization(options).as_str() {
+                    "plain" => {}
+                    "g" => args.push("-Og".to_string()),
+                    "s" if compiler_id == "clang" => args.push("-Oz".to_string()),
+                    level => args.push(format!("-O{}", level)),
+                }
+                if crate::options::effective_debug(options) {
+                    args.push("-g".to_string());
+                }
             }
+
+            let language_key = match file_lang.as_str() {
+                "c++" => "cpp",
+                other => other,
+            };
+            if let Some(per_language) = build_data.project_args.get(&target.project_name) {
+                if let Some(project_args) = per_language.get(language_key) {
+                    args.extend(project_args.iter().cloned());
+                }
+            }
+            if let Some(global_args) = build_data.global_args.get(language_key) {
+                args.extend(global_args.iter().cloned());
+            }
+            args.extend(option_string_array(
+                options,
+                &format!("{}_args", language_key),
+            ));
 
             // Dependency compile args
             for dep in &target.dependencies {
@@ -286,6 +402,15 @@ impl NinjaBackend {
                 }
             }
 
+            match language_key {
+                "c" => args.extend(target.c_args.iter().cloned()),
+                "cpp" => args.extend(target.cpp_args.iter().cloned()),
+                "objc" => args.extend(target.objc_args.iter().cloned()),
+                "objcpp" => args.extend(target.objcpp_args.iter().cloned()),
+                "rust" => args.extend(target.rust_args.iter().cloned()),
+                _ => {}
+            }
+
             let depfile = format!("{}.d", obj_path);
 
             write!(out, "build {}: {} {}", obj_path, file_compile_rule, source_path).unwrap();
@@ -295,7 +420,7 @@ impl NinjaBackend {
             writeln!(out).unwrap();
             writeln!(out, "  DEPFILE = {}", depfile).unwrap();
             if !args.is_empty() {
-                writeln!(out, "  ARGS = {}", args.join(" ")).unwrap();
+                writeln!(out, "  ARGS = {}", shell_escape_command(&args)).unwrap();
             }
             writeln!(out).unwrap();
 
@@ -315,6 +440,15 @@ impl NinjaBackend {
                     if let Object::Dependency(d) = dep {
                         link_args.extend(d.link_args.iter().cloned());
                     }
+                }
+                let link_language = if lang == "c++" { "cpp" } else { lang.as_str() };
+                if let Some(per_language) = build_data.project_link_args.get(&target.project_name) {
+                    if let Some(project_args) = per_language.get(link_language) {
+                        link_args.extend(project_args.iter().cloned());
+                    }
+                }
+                if let Some(global_args) = build_data.global_link_args.get(link_language) {
+                    link_args.extend(global_args.iter().cloned());
                 }
                 link_args.extend(target.link_args.iter().cloned());
 
@@ -394,6 +528,15 @@ impl NinjaBackend {
                     if let Object::Dependency(d) = dep {
                         link_args.extend(d.link_args.iter().cloned());
                     }
+                }
+                let link_language = if lang == "c++" { "cpp" } else { lang.as_str() };
+                if let Some(per_language) = build_data.project_link_args.get(&target.project_name) {
+                    if let Some(project_args) = per_language.get(link_language) {
+                        link_args.extend(project_args.iter().cloned());
+                    }
+                }
+                if let Some(global_args) = build_data.global_link_args.get(link_language) {
+                    link_args.extend(global_args.iter().cloned());
                 }
                 link_args.extend(target.link_args.iter().cloned());
 
@@ -726,8 +869,10 @@ impl NinjaBackend {
             || lower.ends_with(".c++")
         {
             "cpp".to_string()
-        } else if lower.ends_with(".m") || lower.ends_with(".mm") {
-            if lower.ends_with(".mm") { "cpp".to_string() } else { "c".to_string() }
+        } else if lower.ends_with(".mm") {
+            "objcpp".to_string()
+        } else if lower.ends_with(".m") {
+            "objc".to_string()
         } else if lower.ends_with(".rs") {
             "rust".to_string()
         } else if lower.ends_with(".f") || lower.ends_with(".f90") || lower.ends_with(".f95") {
@@ -777,11 +922,42 @@ impl NinjaBackend {
     }
 }
 
+fn option_string(options: &HashMap<String, Object>, key: &str, default: &str) -> String {
+    match options.get(key) {
+        Some(Object::String(value)) => value.clone(),
+        Some(Object::Int(value)) => value.to_string(),
+        _ => default.to_string(),
+    }
+}
+
+fn option_bool(options: &HashMap<String, Object>, key: &str, default: bool) -> bool {
+    match options.get(key) {
+        Some(Object::Bool(value)) => *value,
+        _ => default,
+    }
+}
+
+fn option_string_array(options: &HashMap<String, Object>, key: &str) -> Vec<String> {
+    match options.get(key) {
+        Some(Object::Array(items)) => items
+            .iter()
+            .filter_map(|item| match item {
+                Object::String(value) => Some(value.clone()),
+                _ => None,
+            })
+            .collect(),
+        Some(Object::String(value)) => vec![value.clone()],
+        _ => Vec::new(),
+    }
+}
+
 fn shell_escape_command(parts: &[String]) -> String {
     parts
         .iter()
         .map(|p| {
-            if p.contains(' ')
+            if p.is_empty() {
+                "''".to_string()
+            } else if p.contains(' ')
                 || p.contains('\'')
                 || p.contains('"')
                 || p.contains('$')

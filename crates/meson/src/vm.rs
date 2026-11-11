@@ -112,6 +112,8 @@ pub struct VM {
     pub caller_option_keys: HashSet<String>,
     /// Native file properties (from --native-file [properties] section)
     pub native_properties: HashMap<String, Object>,
+    /// Options set explicitly on the command line, which outrank project defaults.
+    pub cmdline_option_keys: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -149,6 +151,12 @@ pub struct BuildData {
     pub dependency_overrides: HashMap<String, Vec<(Option<bool>, Object)>>,
     pub c_std: String,
     pub cpp_std: String,
+    pub compiler_ids: HashMap<String, String>,
+    pub project_args: HashMap<String, HashMap<String, Vec<String>>>,
+    pub project_link_args: HashMap<String, HashMap<String, Vec<String>>>,
+    pub global_args: HashMap<String, Vec<String>>,
+    pub global_link_args: HashMap<String, Vec<String>>,
+    pub options: HashMap<String, Object>,
 }
 
 #[derive(Debug, Clone)]
@@ -165,6 +173,8 @@ pub struct BuildTarget {
     pub link_args: Vec<String>,
     pub c_args: Vec<String>,
     pub cpp_args: Vec<String>,
+    pub objc_args: Vec<String>,
+    pub objcpp_args: Vec<String>,
     pub rust_args: Vec<String>,
     pub install: bool,
     pub install_dir: Option<String>,
@@ -184,6 +194,7 @@ pub struct BuildTarget {
     pub build_by_default: bool,
     pub subdir: String,
     pub output_name: String,
+    pub project_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -347,6 +358,7 @@ impl VM {
             top_subproject_dir: "subprojects".to_string(),
             caller_option_keys: HashSet::new(),
             native_properties: HashMap::new(),
+            cmdline_option_keys: HashSet::new(),
         }
     }
 

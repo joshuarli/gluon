@@ -441,39 +441,8 @@ fn builtin_project(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
 
     // Apply default_options AFTER loading option files.
     // Priority: CLI > caller subproject() default_options > project() default_options > option file defaults.
-    // - For keys in caller_option_keys (set by caller subproject() kwargs): use or_insert to preserve.
+    // - For keys set on the command line or by the caller subproject(): use or_insert to preserve.
     // - For all other keys: use insert to override option file defaults and inherited parent values.
-    // Known string-typed built-in options that should not be parsed as integers
-    let string_typed_builtins = [
-        "buildtype",
-        "optimization",
-        "warning_level",
-        "default_library",
-        "b_sanitize",
-        "b_pgo",
-        "b_ndebug",
-        "unity",
-        "layout",
-        "wrap_mode",
-        "backend",
-        "install_umask",
-        "prefix",
-        "bindir",
-        "libdir",
-        "libexecdir",
-        "includedir",
-        "datadir",
-        "mandir",
-        "infodir",
-        "localedir",
-        "sysconfdir",
-        "localstatedir",
-        "sharedstatedir",
-        "sbindir",
-        "cpp_std",
-        "c_std",
-        "cpp_eh",
-    ];
     for opt_str in &default_options {
         if let Some(eq_pos) = opt_str.find('=') {
             let key = opt_str[..eq_pos].trim().to_string();
@@ -487,13 +456,13 @@ fn builtin_project(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
             } else {
                 key
             };
-            let obj = if string_typed_builtins.contains(&key.as_str()) {
-                crate::objects::Object::String(val.to_string())
+            let obj = if crate::options::builtin_option_key(&key).is_some() {
+                crate::options::parse_builtin_option_value(&key, val)
             } else {
                 crate::options::parse_option_value(val)
             };
-            if vm.caller_option_keys.contains(&key) {
-                // Caller subproject() default_options take priority; don't override
+            if vm.caller_option_keys.contains(&key) || vm.cmdline_option_keys.contains(&key) {
+                // Command line and caller subproject() default_options take priority
                 vm.options.entry(key).or_insert(obj);
             } else {
                 // Override option file defaults and inherited parent values
@@ -770,11 +739,33 @@ fn build_target_common(
         _ => {}
     }
 
-    let c_args = VM::get_arg_string_array(args, "c_args");
-    let cpp_args = VM::get_arg_string_array(args, "cpp_args");
+    let mut c_args = VM::get_arg_string_array(args, "c_args");
+    let mut cpp_args = VM::get_arg_string_array(args, "cpp_args");
+    let mut objc_args = VM::get_arg_string_array(args, "objc_args");
+    let mut objcpp_args = VM::get_arg_string_array(args, "objcpp_args");
     let rust_args = VM::get_arg_string_array(args, "rust_args");
     let link_args = VM::get_arg_string_array(args, "link_args");
     let override_options = VM::get_arg_string_array(args, "override_options");
+    let per_kind = match target_type {
+        TargetType::StaticLibrary => "static",
+        TargetType::SharedLibrary | TargetType::SharedModule => "shared",
+        _ => "",
+    };
+    if !per_kind.is_empty() {
+        c_args.extend(VM::get_arg_string_array(args, &format!("c_{}_args", per_kind)));
+        cpp_args.extend(VM::get_arg_string_array(
+            args,
+            &format!("cpp_{}_args", per_kind),
+        ));
+        objc_args.extend(VM::get_arg_string_array(
+            args,
+            &format!("objc_{}_args", per_kind),
+        ));
+        objcpp_args.extend(VM::get_arg_string_array(
+            args,
+            &format!("objcpp_{}_args", per_kind),
+        ));
+    }
     let gnu_symbol_visibility = VM::get_arg_str(args, "gnu_symbol_visibility", usize::MAX)
         .unwrap_or("")
         .to_string();
@@ -836,6 +827,8 @@ fn build_target_common(
         link_args,
         c_args,
         cpp_args,
+        objc_args,
+        objcpp_args,
         rust_args,
         install,
         install_dir,
@@ -855,6 +848,11 @@ fn build_target_common(
         build_by_default,
         subdir: subdir.clone(),
         output_name: output_name.clone(),
+        project_name: vm
+            .project
+            .as_ref()
+            .map(|p| p.name.clone())
+            .unwrap_or_default(),
     };
 
     vm.build_data.targets.push(target);
@@ -3805,8 +3803,10 @@ fn builtin_get_option(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
         "sharedstatedir" => Ok(Object::String("com".to_string())),
         "sbindir" => Ok(Object::String("sbin".to_string())),
         "buildtype" => Ok(Object::String("debug".to_string())),
-        "debug" => Ok(Object::Bool(true)),
-        "optimization" => Ok(Object::String("0".to_string())),
+        "debug" => Ok(Object::Bool(crate::options::effective_debug(&vm.options))),
+        "optimization" => Ok(Object::String(crate::options::effective_optimization(
+            &vm.options,
+        ))),
         "warning_level" => Ok(Object::String("1".to_string())),
         "werror" => Ok(Object::Bool(false)),
         "default_library" => Ok(Object::String("shared".to_string())),
@@ -4020,21 +4020,92 @@ fn builtin_structured_sources(_vm: &mut VM, args: &[CallArg]) -> Result<Object, 
     Ok(Object::StructuredSources(groups))
 }
 
-fn builtin_add_project_arguments(_vm: &mut VM, _args: &[CallArg]) -> Result<Object, String> {
-    // Store for later use by backend
+fn collect_argument_strings(obj: &Object, out: &mut Vec<String>) {
+    match obj {
+        Object::String(s) => out.push(s.clone()),
+        Object::File(f) => out.push(f.path.clone()),
+        Object::Array(items) => {
+            for item in items {
+                collect_argument_strings(item, out);
+            }
+        }
+        Object::None => {}
+        other => out.push(other.to_string_value()),
+    }
+}
+
+fn argument_languages(args: &[CallArg]) -> Result<Vec<String>, String> {
+    let mut languages = Vec::new();
+    match VM::get_arg_value(args, "language") {
+        Some(Object::String(language)) => languages.push(language.clone()),
+        Some(Object::Array(items)) => {
+            for item in items {
+                if let Object::String(language) = item {
+                    languages.push(language.clone());
+                }
+            }
+        }
+        _ => return Err("missing required keyword argument \"language\"".to_string()),
+    }
+    Ok(languages)
+}
+
+fn add_arguments(
+    vm: &mut VM,
+    args: &[CallArg],
+    global: bool,
+    link: bool,
+) -> Result<Object, String> {
+    let mut values = Vec::new();
+    for arg in VM::get_positional_args(args) {
+        collect_argument_strings(arg, &mut values);
+    }
+    let languages = argument_languages(args)?;
+    if global {
+        let target = if link {
+            &mut vm.build_data.global_link_args
+        } else {
+            &mut vm.build_data.global_args
+        };
+        for language in languages {
+            target.entry(language).or_default().extend(values.clone());
+        }
+    } else {
+        let project = vm
+            .project
+            .as_ref()
+            .map(|p| p.name.clone())
+            .unwrap_or_default();
+        let target = if link {
+            &mut vm.build_data.project_link_args
+        } else {
+            &mut vm.build_data.project_args
+        };
+        let per_language = target.entry(project).or_default();
+        for language in languages {
+            per_language
+                .entry(language)
+                .or_default()
+                .extend(values.clone());
+        }
+    }
     Ok(Object::None)
 }
 
-fn builtin_add_project_link_arguments(_vm: &mut VM, _args: &[CallArg]) -> Result<Object, String> {
-    Ok(Object::None)
+fn builtin_add_project_arguments(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
+    add_arguments(vm, args, false, false)
 }
 
-fn builtin_add_global_arguments(_vm: &mut VM, _args: &[CallArg]) -> Result<Object, String> {
-    Ok(Object::None)
+fn builtin_add_project_link_arguments(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
+    add_arguments(vm, args, false, true)
 }
 
-fn builtin_add_global_link_arguments(_vm: &mut VM, _args: &[CallArg]) -> Result<Object, String> {
-    Ok(Object::None)
+fn builtin_add_global_arguments(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
+    add_arguments(vm, args, true, false)
+}
+
+fn builtin_add_global_link_arguments(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
+    add_arguments(vm, args, true, true)
 }
 
 fn builtin_add_languages(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {

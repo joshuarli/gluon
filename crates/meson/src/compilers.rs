@@ -39,6 +39,13 @@ pub fn detect_compiler(vm: &mut VM, language: &str) -> bool {
     };
 
     for (cmd, compiler_id) in candidates {
+        let compiler_id = if matches!(language, "c" | "cpp" | "c++" | "objc" | "objcpp")
+            && compiler_id == "gcc"
+        {
+            detect_c_family_id(cmd)
+        } else {
+            compiler_id
+        };
         if let Some(version) = get_compiler_version(cmd, compiler_id) {
             let compiler = CompilerData {
                 id: compiler_id.to_string(),
@@ -50,10 +57,31 @@ pub fn detect_compiler(vm: &mut VM, language: &str) -> bool {
             };
             let key = format!("compiler_{}", language);
             vm.globals.insert(key, Object::Compiler(compiler));
+            vm.build_data
+                .compiler_ids
+                .insert(language.to_string(), compiler_id.to_string());
+            let canonical = match language {
+                "c++" => "cpp",
+                other => other,
+            };
+            vm.build_data
+                .compiler_ids
+                .insert(canonical.to_string(), compiler_id.to_string());
             return true;
         }
     }
     false
+}
+
+fn detect_c_family_id(cmd: &str) -> &'static str {
+    if let Ok(output) = Command::new(cmd).arg("--version").output() {
+        let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+        text.push_str(&String::from_utf8_lossy(&output.stderr));
+        if text.to_lowercase().contains("clang") {
+            return "clang";
+        }
+    }
+    "gcc"
 }
 
 fn get_compiler_version(cmd: &str, compiler_id: &str) -> Option<String> {

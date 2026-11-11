@@ -181,6 +181,8 @@ fn rust_proc_macro(vm: &mut VM, _obj: &Object, args: &[CallArg]) -> Result<Objec
         link_args: Vec::new(),
         c_args: Vec::new(),
         cpp_args: Vec::new(),
+        objc_args: Vec::new(),
+        objcpp_args: Vec::new(),
         rust_args,
         install: false,
         install_dir: None,
@@ -200,6 +202,11 @@ fn rust_proc_macro(vm: &mut VM, _obj: &Object, args: &[CallArg]) -> Result<Objec
         build_by_default: true,
         subdir: vm.current_subdir.clone(),
         output_name,
+        project_name: vm
+            .project
+            .as_ref()
+            .map(|p| p.name.clone())
+            .unwrap_or_default(),
     };
 
     let target_ref = BuildTargetRef {

@@ -160,6 +160,8 @@ fn python_extension_module(vm: &mut VM, _obj: &Object, args: &[CallArg]) -> Resu
         link_args: Vec::new(),
         c_args: Vec::new(),
         cpp_args: Vec::new(),
+        objc_args: Vec::new(),
+        objcpp_args: Vec::new(),
         rust_args: Vec::new(),
         install,
         install_dir,
@@ -183,6 +185,11 @@ fn python_extension_module(vm: &mut VM, _obj: &Object, args: &[CallArg]) -> Resu
             subdir
         },
         output_name,
+        project_name: vm
+            .project
+            .as_ref()
+            .map(|p| p.name.clone())
+            .unwrap_or_default(),
     };
 
     let target_ref = BuildTargetRef {

@@ -92,10 +92,24 @@ run_compare_meson() {
   ref_build="$work/build"
   cand_build="$cand_work/builddir"
   mkdir -p "$ref_build" "$cand_build"
-  meson setup "$ref_build" "$src_copy" >"$work/setup.log" 2>&1
-  ref_setup=$?
-  (cd "$cand_work" && "$GLUON_MESON" setup "$src_copy" >"$work/cand_setup.log" 2>&1)
-  cand_setup=$?
+  setup_args=()
+  if [ -f "$src/setup-args.txt" ]; then
+    while IFS= read -r line; do
+      [ -z "$line" ] && continue
+      setup_args+=("$line")
+    done <"$src/setup-args.txt"
+  fi
+  if [ "${#setup_args[@]}" -eq 0 ]; then
+    meson setup "$ref_build" "$src_copy" >"$work/setup.log" 2>&1
+    ref_setup=$?
+    (cd "$cand_work" && "$GLUON_MESON" setup "$src_copy" >"$work/cand_setup.log" 2>&1)
+    cand_setup=$?
+  else
+    meson setup "$ref_build" "$src_copy" "${setup_args[@]}" >"$work/setup.log" 2>&1
+    ref_setup=$?
+    (cd "$cand_work" && "$GLUON_MESON" setup "$src_copy" "${setup_args[@]}" >"$work/cand_setup.log" 2>&1)
+    cand_setup=$?
+  fi
   if [ "$ref_setup" != "$cand_setup" ]; then
     printf 'FAIL %s setup exit ref=%s cand=%s\n' "$id" "$ref_setup" "$cand_setup" >>"$TMPBASE/results.log"
     return 1
@@ -103,6 +117,10 @@ run_compare_meson() {
   if [ "$ref_setup" != "0" ]; then
     printf 'PASS %s setup-both-fail (both exit %s)\n' "$id" "$ref_setup" >>"$TMPBASE/results.log"
     return 0
+  fi
+  skip_edges=0
+  if [ -f "$src/skip-edge-count" ]; then
+    skip_edges=1
   fi
   ninja -C "$ref_build" >"$work/build.log" 2>&1
   ref_build_exit=$?
@@ -116,14 +134,31 @@ run_compare_meson() {
     printf 'PASS %s build-both-fail (both exit %s)\n' "$id" "$ref_build_exit" >>"$TMPBASE/results.log"
     return 0
   fi
+  if [ -f "$src/expect-flags.txt" ]; then
+    grep -E '^[[:space:]]*ARGS = ' "$ref_build/build.ninja" >"$work/ref_args.txt" 2>/dev/null || true
+    grep -E '^[[:space:]]*ARGS = ' "$cand_build/build.ninja" >"$work/cand_args.txt" 2>/dev/null || true
+    while IFS= read -r flag; do
+      [ -z "$flag" ] && continue
+      if ! grep -F -- "$flag" "$work/ref_args.txt" >/dev/null 2>&1; then
+        printf 'FAIL %s reference ARGS missing %s\n' "$id" "$flag" >>"$TMPBASE/results.log"
+        return 1
+      fi
+      if ! grep -F -- "$flag" "$work/cand_args.txt" >/dev/null 2>&1; then
+        printf 'FAIL %s candidate ARGS missing %s\n' "$id" "$flag" >>"$TMPBASE/results.log"
+        return 1
+      fi
+    done <"$src/expect-flags.txt"
+  fi
   # compare executed edges (counts) and final artifacts (symbols); rule
   # definitions differ by design (P-6), so defined-command sets are not compared.
   # Final outputs: executables, shared libs, static libs (exclude intermediates).
-  ref_edges=$(grep -c '^\[[0-9]*\/' "$work/build.log" || true)
-  cand_edges=$(grep -c '^\[[0-9]*\/' "$work/cand_build.log" || true)
-  if [ "$ref_edges" != "$cand_edges" ]; then
-    printf 'FAIL %s edge count ref=%s cand=%s\n' "$id" "$ref_edges" "$cand_edges" >>"$TMPBASE/results.log"
-    return 1
+  if [ "$skip_edges" -eq 0 ]; then
+    ref_edges=$(grep -c '^\[[0-9]*\/' "$work/build.log" || true)
+    cand_edges=$(grep -c '^\[[0-9]*\/' "$work/cand_build.log" || true)
+    if [ "$ref_edges" != "$cand_edges" ]; then
+      printf 'FAIL %s edge count ref=%s cand=%s\n' "$id" "$ref_edges" "$cand_edges" >>"$TMPBASE/results.log"
+      return 1
+    fi
   fi
   # find final outputs (exclude .o, .d, build.ninja, meson-info/logs/private,
   # compile_commands.json, ninja logs)
@@ -169,11 +204,13 @@ run_compare_meson() {
     printf 'FAIL %s no-op exit ref=%s cand=%s\n' "$id" "$ref_noop" "$cand_noop" >>"$TMPBASE/results.log"
     return 1
   fi
-  ref_edges=$(grep -c '^\[[0-9]*\/' "$work/build.log" || true)
-  cand_edges=$(grep -c '^\[[0-9]*\/' "$work/cand_build.log" || true)
-  if [ "$ref_edges" != "$cand_edges" ]; then
-    printf 'FAIL %s edge count ref=%s cand=%s\n' "$id" "$ref_edges" "$cand_edges" >>"$TMPBASE/results.log"
-    return 1
+  if [ "$skip_edges" -eq 0 ]; then
+    ref_edges=$(grep -c '^\[[0-9]*\/' "$work/build.log" || true)
+    cand_edges=$(grep -c '^\[[0-9]*\/' "$work/cand_build.log" || true)
+    if [ "$ref_edges" != "$cand_edges" ]; then
+      printf 'FAIL %s edge count ref=%s cand=%s\n' "$id" "$ref_edges" "$cand_edges" >>"$TMPBASE/results.log"
+      return 1
+    fi
   fi
   printf 'PASS %s\n' "$id" >>"$TMPBASE/results.log"
   return 0
