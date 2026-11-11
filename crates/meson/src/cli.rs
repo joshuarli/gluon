@@ -76,6 +76,7 @@ struct InstallArgs {
     skip_subprojects: bool,
     tags: Vec<String>,
     strip: bool,
+    no_rebuild: bool,
 }
 
 struct IntrospectArgs {
@@ -390,6 +391,7 @@ impl Cli {
         let mut skip_subprojects = false;
         let mut tags = Vec::new();
         let mut strip = false;
+        let mut no_rebuild = false;
         let mut i = 0;
 
         while i < args.len() {
@@ -401,6 +403,9 @@ impl Cli {
                         destdir = Some(args[i].clone());
                     }
                 }
+                _ if arg.starts_with("--destdir=") => {
+                    destdir = Some(arg["--destdir=".len()..].to_string());
+                }
                 "--skip-subprojects" => skip_subprojects = true,
                 "--tags" => {
                     i += 1;
@@ -409,12 +414,14 @@ impl Cli {
                     }
                 }
                 "--strip" => strip = true,
+                "--no-rebuild" => no_rebuild = true,
                 "-C" => {
                     i += 1;
                     if i < args.len() {
                         build_dir = args[i].clone();
                     }
                 }
+                _ if arg.starts_with("-C") => build_dir = arg[2..].to_string(),
                 _ => build_dir = arg.clone(),
             }
             i += 1;
@@ -426,6 +433,7 @@ impl Cli {
             skip_subprojects,
             tags,
             strip,
+            no_rebuild,
         })
     }
 
@@ -811,7 +819,28 @@ impl Cli {
 
         // Generate build.ninja
         interp.vm.build_data.options = interp.vm.options.clone();
-        let backend = NinjaBackend::new(&source_dir, &build_dir);
+        let install_plan = match crate::install::generate(
+            &interp.vm.build_data,
+            &interp.vm.options,
+            &source_dir,
+            &build_dir,
+        ) {
+            Ok(plan) => plan,
+            Err(e) => {
+                eprintln!("ERROR generating install plan: {}", e);
+                return 1;
+            }
+        };
+        if let Err(e) = crate::install::write_plan(&build_dir, &install_plan) {
+            eprintln!("ERROR writing install plan: {}", e);
+            return 1;
+        }
+        let meson_command = std::env::current_exe()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "meson".to_string());
+        let backend = NinjaBackend::new(&source_dir, &build_dir)
+            .with_meson_command(&meson_command)
+            .with_install_aliases();
         let ninja = match backend.generate(&interp.vm.build_data, &project) {
             Ok(n) => n,
             Err(e) => {
@@ -835,7 +864,12 @@ impl Cli {
         }
 
         // Write introspection data
-        if let Err(e) = write_introspection(&build_dir, &interp.vm.build_data, &project) {
+        if let Err(e) = write_introspection(
+            &build_dir,
+            &interp.vm.build_data,
+            &project,
+            &install_plan,
+        ) {
             eprintln!("Warning: Cannot write introspection: {}", e);
         }
 
@@ -1006,37 +1040,40 @@ impl Cli {
     }
 
     fn cmd_install(&self, args: &InstallArgs) -> i32 {
-        // Read install data from introspection
-        let installed_file = format!("{}/meson-info/intro-installed.json", args.build_dir);
-        let prefix =
-            std::env::var("MESON_INSTALL_PREFIX").unwrap_or_else(|_| "/usr/local".to_string());
-
+        let build_dir = std::fs::canonicalize(&args.build_dir)
+            .unwrap_or_else(|_| PathBuf::from(&args.build_dir))
+            .to_string_lossy()
+            .to_string();
         let destdir = args
             .destdir
             .clone()
             .or_else(|| std::env::var("DESTDIR").ok())
             .unwrap_or_default();
 
-        eprintln!("Installing into {}{}", destdir, prefix);
-
-        // Use ninja install
-        let mut cmd = Command::new(which_ninja());
-        cmd.current_dir(&args.build_dir);
-        cmd.arg("install");
-        if !destdir.is_empty() {
-            cmd.env("DESTDIR", &destdir);
-        }
-
-        match cmd.status() {
-            Ok(status) => {
-                if status.success() {
-                    0
-                } else {
-                    1
+        if !args.no_rebuild {
+            let mut cmd = Command::new(which_ninja());
+            cmd.current_dir(&build_dir);
+            match cmd.status() {
+                Ok(status) if status.success() => {}
+                Ok(status) => return status.code().unwrap_or(1),
+                Err(e) => {
+                    eprintln!("Failed to run ninja: {}", e);
+                    return 1;
                 }
             }
+        }
+
+        let plan = match crate::install::read_plan(&build_dir) {
+            Ok(plan) => plan,
             Err(e) => {
-                eprintln!("Failed to run ninja install: {}", e);
+                eprintln!("{}", e);
+                return 1;
+            }
+        };
+        match crate::install::execute(&plan, &build_dir, &destdir) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("Installation failed: {}", e);
                 1
             }
         }

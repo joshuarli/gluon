@@ -13,6 +13,8 @@ const JSON_PRETTY: SerializerConfig =
 pub struct NinjaBackend {
     pub source_root: String,
     pub build_root: String,
+    pub meson_command: String,
+    pub install_aliases: bool,
 }
 
 impl NinjaBackend {
@@ -20,7 +22,19 @@ impl NinjaBackend {
         Self {
             source_root: source_root.to_string(),
             build_root: build_root.to_string(),
+            meson_command: "meson".to_string(),
+            install_aliases: false,
         }
+    }
+
+    pub fn with_meson_command(mut self, meson_command: &str) -> Self {
+        self.meson_command = meson_command.to_string();
+        self
+    }
+
+    pub fn with_install_aliases(mut self) -> Self {
+        self.install_aliases = true;
+        self
     }
 
     pub fn generate(
@@ -62,7 +76,9 @@ impl NinjaBackend {
         self.write_test_targets(&mut out, build_data)?;
 
         // Install target
-        self.write_install_target(&mut out, build_data)?;
+        if self.install_aliases {
+            self.write_install_target(&mut out, build_data)?;
+        }
 
         // Default targets
         self.write_defaults(&mut out, build_data)?;
@@ -803,29 +819,23 @@ impl NinjaBackend {
         Ok(())
     }
 
-    fn write_install_target(&self, out: &mut String, build_data: &BuildData) -> Result<(), String> {
-        let mut install_deps = Vec::new();
-
-        for target in &build_data.targets {
-            if target.install {
-                let dir = if target.subdir.is_empty() {
-                    String::new()
-                } else {
-                    format!("{}/", target.subdir)
-                };
-                install_deps.push(format!("{}{}", dir, target.output_name));
-            }
-        }
-
-        if !install_deps.is_empty() {
-            writeln!(
-                out,
-                "build meson-install-prereq: phony {}",
-                install_deps.join(" ")
-            )
-            .unwrap();
-            writeln!(out).unwrap();
-        }
+    fn write_install_target(&self, out: &mut String, _build_data: &BuildData) -> Result<(), String> {
+        writeln!(out, "build install: phony meson-internal__install").unwrap();
+        writeln!(out).unwrap();
+        writeln!(out, "build meson-internal__install: CUSTOM_COMMAND PHONY | all").unwrap();
+        writeln!(out, "  DESC = Installing files").unwrap();
+        writeln!(
+            out,
+            "  COMMAND = {}",
+            shell_escape_command(&[
+                self.meson_command.clone(),
+                "install".to_string(),
+                "--no-rebuild".to_string(),
+            ])
+        )
+        .unwrap();
+        writeln!(out, "  pool = console").unwrap();
+        writeln!(out).unwrap();
         Ok(())
     }
 
@@ -854,7 +864,10 @@ impl NinjaBackend {
             }
         }
 
-        if !defaults.is_empty() {
+        if self.install_aliases {
+            writeln!(out, "build all: phony {}", defaults.join(" ")).unwrap();
+            writeln!(out, "default all").unwrap();
+        } else if !defaults.is_empty() {
             writeln!(out, "default {}", defaults.join(" ")).unwrap();
         }
 
@@ -977,6 +990,7 @@ pub fn write_introspection(
     build_root: &str,
     build_data: &BuildData,
     project: &ProjectInfo,
+    install_plan: &crate::install::InstallPlan,
 ) -> Result<(), String> {
     let intro_dir = format!("{}/meson-info", build_root);
     std::fs::create_dir_all(&intro_dir)
@@ -1067,8 +1081,17 @@ pub fn write_introspection(
     .map_err(|e| format!("Cannot write introspection: {}", e))?;
 
     // intro-installed.json
-    std::fs::write(format!("{}/intro-installed.json", intro_dir), "{}")
-        .map_err(|e| format!("Cannot write introspection: {}", e))?;
+    let mut installed = deser_value::Map::new();
+    for (source, destination) in crate::install::installed_entries(install_plan) {
+        installed.insert(source, destination);
+    }
+    std::fs::write(
+        format!("{}/intro-installed.json", intro_dir),
+        JSON_PRETTY
+            .to_string(&deser_value::Value::from(installed))
+            .unwrap(),
+    )
+    .map_err(|e| format!("Cannot write introspection: {}", e))?;
 
     // intro-benchmarks.json
     std::fs::write(format!("{}/intro-benchmarks.json", intro_dir), "[]")

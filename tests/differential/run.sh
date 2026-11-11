@@ -87,7 +87,7 @@ run_compare_meson() {
   # copy all src files
   for f in "$src"/*; do
     [ -e "$f" ] || continue
-    cp "$f" "$src_copy/"
+    cp -R "$f" "$src_copy/"
   done
   ref_build="$work/build"
   cand_build="$cand_work/builddir"
@@ -209,6 +209,30 @@ run_compare_meson() {
     cand_edges=$(grep -c '^\[[0-9]*\/' "$work/cand_build.log" || true)
     if [ "$ref_edges" != "$cand_edges" ]; then
       printf 'FAIL %s edge count ref=%s cand=%s\n' "$id" "$ref_edges" "$cand_edges" >>"$TMPBASE/results.log"
+      return 1
+    fi
+  fi
+  if [ -f "$src/compare-install" ]; then
+    ref_dest="$work/dest"
+    cand_dest="$cand_work/dest"
+    rm -rf "$ref_dest" "$cand_dest"
+    DESTDIR="$ref_dest" ninja -C "$ref_build" install >"$work/install.log" 2>&1
+    ref_install=$?
+    DESTDIR="$cand_dest" "$GLUON_NINJA" -C "$cand_build" install >"$work/cand_install.log" 2>&1
+    cand_install=$?
+    if [ "$ref_install" != "$cand_install" ]; then
+      printf 'FAIL %s install exit ref=%s cand=%s\n' "$id" "$ref_install" "$cand_install" >>"$TMPBASE/results.log"
+      return 1
+    fi
+    if [ "$ref_install" != "0" ]; then
+      printf 'FAIL %s install failed (both exit %s)\n' "$id" "$ref_install" >>"$TMPBASE/results.log"
+      return 1
+    fi
+    python3 "$DIFF_DIR/install_snapshot.py" "$ref_dest" >"$work/install_tree.txt"
+    python3 "$DIFF_DIR/install_snapshot.py" "$cand_dest" >"$work/cand_install_tree.txt"
+    if ! diff -q "$work/install_tree.txt" "$work/cand_install_tree.txt" >/dev/null 2>&1; then
+      printf 'FAIL %s installed tree mismatch\n' "$id" >>"$TMPBASE/results.log"
+      diff "$work/install_tree.txt" "$work/cand_install_tree.txt" >>"$TMPBASE/results.log" || true
       return 1
     fi
   fi

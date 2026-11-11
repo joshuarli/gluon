@@ -83,6 +83,45 @@ pub fn builtin_option_is_boolean(key: &str) -> bool {
     builtin_option_kind(key) == "bool"
 }
 
+fn builtin_string_default(key: &str) -> Option<&'static str> {
+    match key {
+        "prefix" => Some("/usr/local"),
+        "bindir" => Some("bin"),
+        "libdir" => Some("lib"),
+        "libexecdir" => Some("libexec"),
+        "includedir" => Some("include"),
+        "datadir" => Some("share"),
+        "mandir" => Some("share/man"),
+        "infodir" => Some("share/info"),
+        "localedir" => Some("share/locale"),
+        "sysconfdir" => Some("etc"),
+        "localstatedir" => Some("var"),
+        "sharedstatedir" => Some("com"),
+        "sbindir" => Some("sbin"),
+        "licensedir" => Some("share/licenses"),
+        "install_umask" => Some("0022"),
+        _ => None,
+    }
+}
+
+pub fn builtin_string(options: &HashMap<String, Object>, key: &str) -> String {
+    match options.get(key) {
+        Some(Object::String(value)) => value.clone(),
+        Some(Object::Int(value)) => value.to_string(),
+        _ => builtin_string_default(key).unwrap_or("").to_string(),
+    }
+}
+
+pub fn join_install_path(base: &str, child: &str) -> String {
+    if child.is_empty() {
+        return base.to_string();
+    }
+    if std::path::Path::new(child).is_absolute() || base.is_empty() || base == "." {
+        return child.to_string();
+    }
+    format!("{}/{}", base.trim_end_matches('/'), child)
+}
+
 pub fn parse_builtin_option_value(key: &str, value: &str) -> Object {
     match builtin_option_kind(key) {
         "bool" => Object::Bool(value == "true" || value == "1"),

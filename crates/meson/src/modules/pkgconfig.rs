@@ -40,8 +40,13 @@ fn pkgconfig_generate(vm: &mut VM, _obj: &Object, args: &[CallArg]) -> Result<Ob
     let libraries_private = VM::get_arg_string_array(args, "libraries_private");
     let extra_cflags = VM::get_arg_string_array(args, "extra_cflags");
     let install_dir = VM::get_arg_str(args, "install_dir", 99)
-        .unwrap_or("${libdir}/pkgconfig")
-        .to_string();
+        .map(String::from)
+        .unwrap_or_else(|| {
+            crate::options::join_install_path(
+                &crate::options::builtin_string(&vm.options, "libdir"),
+                "pkgconfig",
+            )
+        });
     let variables = VM::get_arg_string_array(args, "variables");
     let _uninstalled_variables = VM::get_arg_string_array(args, "uninstalled_variables");
 
@@ -90,8 +95,10 @@ fn pkgconfig_generate(vm: &mut VM, _obj: &Object, args: &[CallArg]) -> Result<Ob
         .join(&pc_filename);
 
     // Write the .pc file to the build directory
-    let _ = std::fs::create_dir_all(build_path.parent().unwrap_or(std::path::Path::new(".")));
-    let _ = std::fs::write(&build_path, &pc);
+    std::fs::create_dir_all(build_path.parent().unwrap_or(std::path::Path::new(".")))
+        .map_err(|e| format!("Cannot create pkgconfig directory: {}", e))?;
+    std::fs::write(&build_path, &pc)
+        .map_err(|e| format!("Cannot write {}: {}", build_path.display(), e))?;
 
     vm.build_data.install_data.push(InstallData {
         sources: vec![build_path.to_string_lossy().to_string()],

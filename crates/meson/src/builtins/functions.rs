@@ -2302,8 +2302,17 @@ fn builtin_configure_file(vm: &mut VM, args: &[CallArg]) -> Result<Object, Strin
     let encoding = VM::get_arg_str(args, "encoding", usize::MAX)
         .unwrap_or("utf-8")
         .to_string();
-    let install = VM::get_arg_bool(args, "install", false);
+    let install_flag = match VM::get_arg_value(args, "install") {
+        Some(Object::Bool(value)) => Some(*value),
+        _ => None,
+    };
     let install_dir = VM::get_arg_str(args, "install_dir", usize::MAX).map(String::from);
+    let install = install_flag.unwrap_or_else(|| {
+        install_dir
+            .as_deref()
+            .map(|dir| !dir.is_empty())
+            .unwrap_or(false)
+    });
     let install_tag = VM::get_arg_str(args, "install_tag", usize::MAX).map(String::from);
     let capture = VM::get_arg_bool(args, "capture", false);
     let depfile = VM::get_arg_str(args, "depfile", usize::MAX).map(String::from);
@@ -2632,25 +2641,27 @@ fn builtin_install_headers(vm: &mut VM, args: &[CallArg]) -> Result<Object, Stri
     let positional = VM::get_positional_args(args);
     let mut sources = Vec::new();
     for arg in &positional {
-        collect_sources(arg, &mut sources);
+        collect_install_sources(vm, arg, &mut sources);
     }
-    let install_dir = VM::get_arg_str(args, "install_dir", usize::MAX)
-        .unwrap_or("include")
-        .to_string();
-    let subdir = VM::get_arg_str(args, "subdir", usize::MAX)
-        .unwrap_or("")
-        .to_string();
-    let full_dir = if subdir.is_empty() {
-        install_dir
-    } else {
-        format!("{}/{}", install_dir, subdir)
-    };
+    let install_dir = VM::get_arg_str(args, "install_dir", usize::MAX).map(String::from);
+    let subdir = VM::get_arg_str(args, "subdir", usize::MAX).map(String::from);
+    if install_dir.is_some() && subdir.is_some() {
+        return Err(
+            "install_headers: cannot specify both \"install_dir\" and \"subdir\". Use only \"install_dir\"."
+                .to_string(),
+        );
+    }
+    let mut full_dir = install_dir
+        .unwrap_or_else(|| crate::options::builtin_string(&vm.options, "includedir"));
+    if let Some(subdir) = subdir {
+        full_dir = crate::options::join_install_path(&full_dir, &subdir);
+    }
     let preserve_path = VM::get_arg_bool(args, "preserve_path", false);
 
     vm.build_data.install_headers.push(InstallData {
         sources,
         install_dir: full_dir,
-        install_mode: None,
+        install_mode: get_install_mode(args),
         rename: Vec::new(),
         subdir: vm.current_subdir.clone(),
         preserve_path,
@@ -2666,23 +2677,39 @@ fn builtin_install_data(vm: &mut VM, args: &[CallArg]) -> Result<Object, String>
     let positional = VM::get_positional_args(args);
     let mut sources = Vec::new();
     for arg in &positional {
-        collect_sources(arg, &mut sources);
+        collect_install_sources(vm, arg, &mut sources);
     }
     if let Some(Object::Array(arr)) = VM::get_arg_value(args, "sources") {
         for s in arr {
-            collect_sources(s, &mut sources);
+            collect_install_sources(vm, s, &mut sources);
         }
     }
     let install_dir = VM::get_arg_str(args, "install_dir", usize::MAX)
-        .unwrap_or("share")
-        .to_string();
+        .map(String::from)
+        .unwrap_or_else(|| {
+            let project_name = vm
+                .project
+                .as_ref()
+                .map(|project| project.name.clone())
+                .unwrap_or_default();
+            crate::options::join_install_path(
+                &crate::options::builtin_string(&vm.options, "datadir"),
+                &project_name,
+            )
+        });
     let rename = VM::get_arg_string_array(args, "rename");
+    if !rename.is_empty() && rename.len() != sources.len() {
+        return Err(
+            "\"rename\" and \"sources\" argument lists must be the same length if \"rename\" is given."
+                .to_string(),
+        );
+    }
     let preserve_path = VM::get_arg_bool(args, "preserve_path", false);
 
     vm.build_data.install_data.push(InstallData {
         sources,
         install_dir,
-        install_mode: None,
+        install_mode: get_install_mode(args),
         rename,
         subdir: vm.current_subdir.clone(),
         preserve_path,
@@ -2716,7 +2743,7 @@ fn builtin_install_subdir(vm: &mut VM, args: &[CallArg]) -> Result<Object, Strin
     vm.build_data.install_subdirs.push(InstallData {
         sources: vec![dir],
         install_dir,
-        install_mode: None,
+        install_mode: get_install_mode(args),
         rename: Vec::new(),
         subdir: vm.current_subdir.clone(),
         preserve_path: false,
@@ -2732,16 +2759,16 @@ fn builtin_install_man(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> 
     let positional = VM::get_positional_args(args);
     let mut sources = Vec::new();
     for arg in &positional {
-        collect_sources(arg, &mut sources);
+        collect_install_sources(vm, arg, &mut sources);
     }
     let install_dir = VM::get_arg_str(args, "install_dir", usize::MAX)
-        .unwrap_or("share/man")
-        .to_string();
+        .map(String::from)
+        .unwrap_or_default();
 
     vm.build_data.install_man.push(InstallData {
         sources,
         install_dir,
-        install_mode: None,
+        install_mode: get_install_mode(args),
         rename: Vec::new(),
         subdir: vm.current_subdir.clone(),
         preserve_path: false,
@@ -2751,6 +2778,46 @@ fn builtin_install_man(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> 
         follow_symlinks: None,
     });
     Ok(Object::None)
+}
+
+fn get_install_mode(args: &[CallArg]) -> Option<Vec<String>> {
+    let mode = match VM::get_arg_value(args, "install_mode") {
+        Some(Object::Array(items)) => items
+            .iter()
+            .filter_map(|item| match item {
+                Object::String(value) => Some(value.clone()),
+                Object::Int(value) => Some(value.to_string()),
+                _ => None,
+            })
+            .collect(),
+        Some(Object::String(value)) => vec![value.clone()],
+        _ => Vec::new(),
+    };
+    if mode.is_empty() { None } else { Some(mode) }
+}
+
+fn collect_install_sources(vm: &VM, obj: &Object, sources: &mut Vec<String>) {
+    match obj {
+        Object::String(value) => sources.push(value.clone()),
+        Object::File(file) => {
+            if file.is_built {
+                let path = if file.subdir.is_empty() {
+                    file.path.clone()
+                } else {
+                    format!("{}/{}", file.subdir, file.path)
+                };
+                sources.push(format!("{}/{}", vm.build_root, path));
+            } else {
+                sources.push(file.path.clone());
+            }
+        }
+        Object::Array(items) => {
+            for item in items {
+                collect_install_sources(vm, item, sources);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn builtin_install_emptydir(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {

@@ -1,15 +1,7 @@
 # TODO
 
 Prefix: GLU
-Next: 20
-
-### GLU-16 · P1 · install is not implemented
-- **Area:** meson
-- **Where:** `crates/meson/src/backend.rs:663`, `crates/meson/src/cli.rs:1000`, `crates/meson/src/backend.rs:894`
-- **Problem:** `build.ninja` has no `install` target, so `ninja -C build install` fails with `unknown target 'install'`. `meson install` prints `Installing into /usr/local` regardless of the configured prefix and then runs that missing target. `intro-installed.json` is always `{}`. OD-4's Play gate never exercised Play's `ninja install` path.
-- **Recommendation:** Write an install plan at setup from targets, headers, data, configure files, custom targets and symlinks under the configured directories; emit `install: phony meson-internal__install` depending on `all` and running `meson install --no-rebuild`; make `meson install` execute that plan with `DESTDIR`; fill `intro-installed.json` from it.
-- **Fix with:** reference-parity
-- **Effort:** L
+Next: 21
 
 ### GLU-17 · P2 · soversion and version do not shape shared library names
 - **Area:** meson
@@ -34,3 +26,11 @@ Next: 20
 - **Recommendation:** Emit the symbol-extractor edge and make dependents' links depend on the `.symbols` output, then delete the `skip-edge-count` markers.
 - **Fix with:** reference-parity
 - **Effort:** M
+
+### GLU-20 · P3 · install accepts options it does not apply
+- **Area:** meson
+- **Where:** `crates/meson/src/cli.rs`, `crates/meson/src/install.rs`
+- **Problem:** `meson install --tags`, `--skip-subprojects` and `--strip` (and the `strip` option) are parsed and silently ignored, and a target's `install_mode` and `configure_file`'s `install_mode` never reach the install plan, so those installs get default modes.
+- **Recommendation:** Apply each as Meson 1.12.1's `minstall.py` does, or reject it with an error until it is implemented.
+- **Fix with:** reference-parity
+- **Effort:** S
