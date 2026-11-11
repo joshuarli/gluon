@@ -235,6 +235,15 @@ run_compare_meson() {
       diff "$work/install_tree.txt" "$work/cand_install_tree.txt" >>"$TMPBASE/results.log" || true
       return 1
     fi
+    if [ -f "$src/compare-install-ids" ]; then
+      python3 "$DIFF_DIR/install_ids.py" "$ref_dest" >"$work/install_ids.txt"
+      python3 "$DIFF_DIR/install_ids.py" "$cand_dest" >"$work/cand_install_ids.txt"
+      if ! diff -q "$work/install_ids.txt" "$work/cand_install_ids.txt" >/dev/null 2>&1; then
+        printf 'FAIL %s installed library ids mismatch\n' "$id" >>"$TMPBASE/results.log"
+        diff "$work/install_ids.txt" "$work/cand_install_ids.txt" >>"$TMPBASE/results.log" || true
+        return 1
+      fi
+    fi
   fi
   printf 'PASS %s\n' "$id" >>"$TMPBASE/results.log"
   return 0

@@ -195,6 +195,98 @@ pub struct BuildTarget {
     pub subdir: String,
     pub output_name: String,
     pub project_name: String,
+    pub ltversion: Option<String>,
+    pub soversion: Option<String>,
+    pub darwin_versions: Option<(String, String)>,
+    pub shared_library_only: bool,
+}
+
+impl BuildTarget {
+    pub fn file_prefix(&self) -> String {
+        self.name_prefix.clone().unwrap_or_else(|| match self.target_type {
+            TargetType::Executable => String::new(),
+            TargetType::SharedLibrary
+            | TargetType::SharedModule
+            | TargetType::StaticLibrary => {
+                if cfg!(target_os = "windows") {
+                    String::new()
+                } else {
+                    "lib".to_string()
+                }
+            }
+            _ => String::new(),
+        })
+    }
+
+    pub fn file_suffix(&self) -> String {
+        self.name_suffix.clone().unwrap_or_else(|| match self.target_type {
+            TargetType::Executable => {
+                if cfg!(target_os = "windows") {
+                    "exe".to_string()
+                } else {
+                    String::new()
+                }
+            }
+            TargetType::SharedLibrary | TargetType::SharedModule => {
+                if cfg!(target_os = "windows") {
+                    "dll".to_string()
+                } else if cfg!(target_os = "macos") {
+                    "dylib".to_string()
+                } else {
+                    "so".to_string()
+                }
+            }
+            TargetType::StaticLibrary => "a".to_string(),
+            _ => String::new(),
+        })
+    }
+
+    pub fn unversioned_output_name(&self) -> String {
+        let suffix = self.file_suffix();
+        if suffix.is_empty() {
+            format!("{}{}", self.file_prefix(), self.name)
+        } else {
+            format!("{}{}.{}", self.file_prefix(), self.name, suffix)
+        }
+    }
+
+    /// Install symlinks Meson creates for a versioned shared library.
+    /// Each entry is (alias name, relative target name).
+    pub fn install_aliases(&self) -> Vec<(String, String)> {
+        let mut aliases = Vec::new();
+        let Some(soversion) = &self.soversion else {
+            return aliases;
+        };
+        if !matches!(
+            self.target_type,
+            TargetType::SharedLibrary | TargetType::SharedModule
+        ) {
+            return aliases;
+        }
+        let suffix = self.file_suffix();
+        if suffix != "so" && suffix != "dylib" {
+            return aliases;
+        }
+        let basic = self.unversioned_output_name();
+        if suffix == "so" {
+            if let Some(ltversion) = &self.ltversion {
+                if ltversion != soversion {
+                    let soversion_name = format!(
+                        "{}{}.{}.{}",
+                        self.file_prefix(),
+                        self.name,
+                        suffix,
+                        soversion
+                    );
+                    aliases.push((soversion_name.clone(), self.output_name.clone()));
+                    aliases.push((basic, soversion_name));
+                    return aliases;
+                }
+            }
+        }
+        aliases.push((basic, self.output_name.clone()));
+        aliases
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

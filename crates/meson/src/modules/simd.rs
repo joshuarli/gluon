@@ -104,6 +104,10 @@ fn simd_check(vm: &mut VM, _obj: &Object, args: &[CallArg]) -> Result<Object, St
                         .as_ref()
                         .map(|p| p.name.clone())
                         .unwrap_or_default(),
+                    ltversion: None,
+                    soversion: None,
+                    darwin_versions: None,
+                    shared_library_only: false,
                 };
 
                 let target_ref = BuildTargetRef {

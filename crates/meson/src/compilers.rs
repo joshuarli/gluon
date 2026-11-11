@@ -498,16 +498,45 @@ fn concatenate_string_literals(input: &str) -> String {
 
 /// Find a library
 pub fn find_library(compiler: &CompilerData, name: &str, dirs: &[String]) -> Option<Object> {
+    // With explicit search directories Meson looks for the library file
+    // itself and returns its path instead of a -l flag.
+    if !dirs.is_empty() {
+        let mut patterns = Vec::new();
+        if cfg!(target_os = "darwin") {
+            patterns.extend(["lib{}.dylib", "lib{}.so", "{}.dylib", "{}.so"]);
+        } else {
+            patterns.extend(["lib{}.so", "{}.so"]);
+        }
+        patterns.extend(["lib{}.a", "{}.a"]);
+        for dir in dirs {
+            for pattern in &patterns {
+                let path = std::path::Path::new(dir).join(pattern.replace("{}", name));
+                if path.is_file() {
+                    return Some(Object::Dependency(DependencyData {
+                        name: name.to_string(),
+                        found: true,
+                        version: String::new(),
+                        compile_args: Vec::new(),
+                        link_args: vec![path.to_string_lossy().to_string()],
+                        sources: Vec::new(),
+                        include_dirs: Vec::new(),
+                        dependencies: Vec::new(),
+                        variables: std::collections::HashMap::new(),
+                        version_reqs: Vec::new(),
+                        is_internal: false,
+                        kind: "library".to_string(),
+                    }));
+                }
+            }
+        }
+        return None;
+    }
+
     // Try linking with -l<name>
     let code = "int main(void) { return 0; }";
     let link_args = vec![format!("-l{}", name)];
-    let mut extra = Vec::new();
-    for dir in dirs {
-        extra.push(format!("-L{}", dir));
-    }
-    extra.extend(link_args.clone());
 
-    if try_link_code_with_args(compiler, code, &[], &extra) {
+    if try_link_code_with_args(compiler, code, &[], &link_args) {
         Some(Object::Dependency(DependencyData {
             name: name.to_string(),
             found: true,
@@ -518,6 +547,7 @@ pub fn find_library(compiler: &CompilerData, name: &str, dirs: &[String]) -> Opt
             include_dirs: Vec::new(),
             dependencies: Vec::new(),
             variables: std::collections::HashMap::new(),
+            version_reqs: Vec::new(),
             is_internal: false,
             kind: "library".to_string(),
         }))

@@ -649,6 +649,7 @@ fn build_target_common(
     vm: &mut VM,
     args: &[CallArg],
     target_type: TargetType,
+    shared_library_only: bool,
 ) -> Result<Object, String> {
     // Disabler propagation: if any argument is a Disabler, return Disabler
     for arg in args {
@@ -779,6 +780,28 @@ fn build_target_common(
     let rust_crate_type = VM::get_arg_str(args, "rust_crate_type", usize::MAX).map(String::from);
     let implicit_include_directories = VM::get_arg_bool(args, "implicit_include_directories", true);
 
+    let (ltversion, soversion, darwin_versions) = if matches!(
+        target_type,
+        TargetType::SharedLibrary | TargetType::SharedModule
+    ) {
+        let ltversion = VM::get_arg_str(args, "version", usize::MAX).map(String::from);
+        let soversion = match VM::get_arg_value(args, "soversion") {
+            Some(Object::String(value)) => Some(value.clone()),
+            Some(Object::Int(value)) => Some(value.to_string()),
+            _ => None,
+        }
+        .or_else(|| {
+            ltversion
+                .as_ref()
+                .map(|version| version.split('.').next().unwrap_or(version).to_string())
+        });
+        let darwin_versions = parse_darwin_versions(VM::get_arg_value(args, "darwin_versions"))
+            .or_else(|| soversion.as_ref().map(|value| (value.clone(), value.clone())));
+        (ltversion, soversion, darwin_versions)
+    } else {
+        (None, None, None)
+    };
+
     let pic = VM::get_arg_value(args, "pic").and_then(|v| {
         if let Object::Bool(b) = v {
             Some(*b)
@@ -812,6 +835,8 @@ fn build_target_common(
         &target_type,
         name_prefix.as_deref(),
         name_suffix.as_deref(),
+        ltversion.as_deref(),
+        soversion.as_deref(),
     );
 
     let target = BuildTarget {
@@ -853,6 +878,10 @@ fn build_target_common(
             .as_ref()
             .map(|p| p.name.clone())
             .unwrap_or_default(),
+        ltversion,
+        soversion,
+        darwin_versions,
+        shared_library_only,
     };
 
     vm.build_data.targets.push(target);
@@ -866,11 +895,34 @@ fn build_target_common(
     }))
 }
 
+fn parse_darwin_versions(value: Option<&Object>) -> Option<(String, String)> {
+    let values: Vec<String> = match value? {
+        Object::Array(items) => items
+            .iter()
+            .filter_map(|item| match item {
+                Object::String(value) => Some(value.clone()),
+                Object::Int(value) => Some(value.to_string()),
+                _ => None,
+            })
+            .collect(),
+        Object::String(value) => vec![value.clone()],
+        Object::Int(value) => vec![value.to_string()],
+        _ => return None,
+    };
+    match values.len() {
+        0 => None,
+        1 => Some((values[0].clone(), values[0].clone())),
+        _ => Some((values[0].clone(), values[1].clone())),
+    }
+}
+
 fn compute_output_name(
     name: &str,
     target_type: &TargetType,
     name_prefix: Option<&str>,
     name_suffix: Option<&str>,
+    ltversion: Option<&str>,
+    soversion: Option<&str>,
 ) -> String {
     let prefix = name_prefix.unwrap_or_else(|| match target_type {
         TargetType::Executable => "",
@@ -911,9 +963,23 @@ fn compute_output_name(
         _ => "",
     });
     if suffix.is_empty() {
-        format!("{}{}", prefix, name)
-    } else {
-        format!("{}{}.{}", prefix, name, suffix)
+        return format!("{}{}", prefix, name);
+    }
+    match target_type {
+        TargetType::SharedLibrary | TargetType::SharedModule if !cfg!(target_os = "windows") => {
+            if cfg!(target_os = "macos") {
+                match soversion {
+                    Some(version) => format!("{}{}.{}.{}", prefix, name, version, suffix),
+                    None => format!("{}{}.{}", prefix, name, suffix),
+                }
+            } else {
+                match ltversion.or(soversion) {
+                    Some(version) => format!("{}{}.{}.{}", prefix, name, suffix, version),
+                    None => format!("{}{}.{}", prefix, name, suffix),
+                }
+            }
+        }
+        _ => format!("{}{}.{}", prefix, name, suffix),
     }
 }
 
@@ -1009,15 +1075,15 @@ fn collect_sources(obj: &Object, sources: &mut Vec<String>) {
 }
 
 fn builtin_executable(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
-    build_target_common(vm, args, TargetType::Executable)
+    build_target_common(vm, args, TargetType::Executable, false)
 }
 
 fn builtin_static_library(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
-    build_target_common(vm, args, TargetType::StaticLibrary)
+    build_target_common(vm, args, TargetType::StaticLibrary, false)
 }
 
 fn builtin_shared_library(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
-    build_target_common(vm, args, TargetType::SharedLibrary)
+    build_target_common(vm, args, TargetType::SharedLibrary, true)
 }
 
 fn builtin_library(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
@@ -1034,15 +1100,15 @@ fn builtin_library(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
         })
         .unwrap_or_else(|| "shared".to_string());
     match default_lib.as_str() {
-        "static" => build_target_common(vm, args, TargetType::StaticLibrary),
+        "static" => build_target_common(vm, args, TargetType::StaticLibrary, false),
         "both" => builtin_both_libraries(vm, args),
-        _ => build_target_common(vm, args, TargetType::SharedLibrary),
+        _ => build_target_common(vm, args, TargetType::SharedLibrary, false),
     }
 }
 
 fn builtin_both_libraries(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
-    let shared = build_target_common(vm, args, TargetType::SharedLibrary)?;
-    let static_lib = build_target_common(vm, args, TargetType::StaticLibrary)?;
+    let shared = build_target_common(vm, args, TargetType::SharedLibrary, false)?;
+    let static_lib = build_target_common(vm, args, TargetType::StaticLibrary, false)?;
     Ok(Object::BothLibraries(
         Box::new(shared),
         Box::new(static_lib),
@@ -1050,7 +1116,7 @@ fn builtin_both_libraries(vm: &mut VM, args: &[CallArg]) -> Result<Object, Strin
 }
 
 fn builtin_shared_module(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
-    build_target_common(vm, args, TargetType::SharedModule)
+    build_target_common(vm, args, TargetType::SharedModule, false)
 }
 
 fn builtin_dependency(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
@@ -1102,6 +1168,7 @@ fn builtin_dependency(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
             include_dirs: Vec::new(),
             dependencies: Vec::new(),
             variables: std::collections::HashMap::new(),
+            version_reqs: Vec::new(),
             is_internal: false,
             kind: String::new(),
         }));
@@ -1119,6 +1186,7 @@ fn builtin_dependency(vm: &mut VM, args: &[CallArg]) -> Result<Object, String> {
             include_dirs: Vec::new(),
             dependencies: Vec::new(),
             variables: std::collections::HashMap::new(),
+            version_reqs: Vec::new(),
             is_internal: false,
             kind: String::new(),
         }));
@@ -1764,6 +1832,7 @@ fn builtin_declare_dependency(vm: &mut VM, args: &[CallArg]) -> Result<Object, S
         include_dirs,
         dependencies,
         variables,
+        version_reqs: Vec::new(),
         is_internal: true,
         kind: String::new(),
     }))

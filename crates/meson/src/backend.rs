@@ -532,11 +532,48 @@ impl NinjaBackend {
                 let link_rule = format!("{}_LINKER", lang);
                 let mut link_args = vec!["-shared".to_string()];
 
+                if cfg!(target_os = "macos") {
+                    link_args.push("-Wl,-dead_strip_dylibs".to_string());
+                    link_args.push("-Wl,-headerpad_max_install_names".to_string());
+                }
+
                 if target.target_type == TargetType::SharedLibrary {
                     if cfg!(target_os = "macos") {
-                        link_args.push(format!("-Wl,-install_name,{}", target.output_name));
+                        let mut install_name = format!(
+                            "@rpath/{}{}",
+                            target.file_prefix(),
+                            target.name
+                        );
+                        if let Some(soversion) = &target.soversion {
+                            install_name.push('.');
+                            install_name.push_str(soversion);
+                        }
+                        install_name.push('.');
+                        install_name.push_str(&target.file_suffix());
+                        let mut parts = vec![
+                            "-Wl".to_string(),
+                            "-install_name".to_string(),
+                            install_name,
+                        ];
+                        if let Some((compatibility, current)) = &target.darwin_versions {
+                            parts.push("-compatibility_version".to_string());
+                            parts.push(compatibility.clone());
+                            parts.push("-current_version".to_string());
+                            parts.push(current.clone());
+                        }
+                        link_args.push(parts.join(","));
                     } else {
-                        link_args.push(format!("-Wl,-soname,{}", target.output_name));
+                        let mut soname = format!(
+                            "{}{}.{}",
+                            target.file_prefix(),
+                            target.name,
+                            target.file_suffix()
+                        );
+                        if let Some(soversion) = &target.soversion {
+                            soname.push('.');
+                            soname.push_str(soversion);
+                        }
+                        link_args.push(format!("-Wl,-soname,{}", soname));
                     }
                 }
 

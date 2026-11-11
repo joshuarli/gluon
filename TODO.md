@@ -1,23 +1,7 @@
 # TODO
 
 Prefix: GLU
-Next: 21
-
-### GLU-17 · P2 · soversion and version do not shape shared library names
-- **Area:** meson
-- **Where:** `crates/meson/src/builtins/functions.rs:871`, `crates/meson/src/backend.rs:387`
-- **Problem:** `library('placebo', soversion: '387')` links `libplacebo.dylib` with `-install_name,libplacebo.dylib`. Meson 1.12.1 links `libplacebo.387.dylib` with `-install_name,@rpath/libplacebo.387.dylib,-compatibility_version,387,-current_version,387` and installs the `libplacebo.dylib` alias; Linux uses `libX.so.N` with a matching SONAME.
-- **Recommendation:** Compute output name, SONAME or install name, Darwin versions and install aliases from `version`, `soversion` and `darwin_versions` as Meson does.
-- **Fix with:** reference-parity
-- **Effort:** M
-
-### GLU-18 · P2 · pkgconfig.generate writes incomplete files and hides write errors
-- **Area:** meson
-- **Where:** `crates/meson/src/modules/pkgconfig.rs:12`
-- **Problem:** `libraries:` is ignored, so libplacebo's `.pc` has no `Libs`; `prefix` is relative to `${pcfiledir}` instead of the configured prefix; `Requires.private` and `Libs.private` are not derived from the library's dependencies; write failures are discarded with `let _ =`.
-- **Recommendation:** Generate from the library objects and their dependencies the way Meson does, use the configured prefix and directories, and return write errors.
-- **Fix with:** reference-parity
-- **Effort:** M
+Next: 27
 
 ### GLU-19 · P3 · shared libraries have no symbol-extractor edge
 - **Area:** meson
@@ -34,3 +18,51 @@ Next: 21
 - **Recommendation:** Apply each as Meson 1.12.1's `minstall.py` does, or reject it with an error until it is implemented.
 - **Fix with:** reference-parity
 - **Effort:** S
+
+### GLU-21 · P3 · shared-library aliases are missing from the build directory
+- **Area:** meson
+- **Where:** `crates/meson/src/backend.rs`, `crates/meson/src/install.rs`
+- **Problem:** Meson creates `libfoo.so`/`libfoo.dylib` and `libfoo.so.<soversion>` symlinks in the build directory at setup (`generate_shlib_aliases`). gluon creates them only in the install plan, so build-tree consumers that open the unversioned name fail and `intro-installed.json` and `build all` disagree with Meson about the build outputs.
+- **Recommendation:** Create the same aliases next to the versioned build output at setup, matching `SharedLibrary.get_aliases()`.
+- **Fix with:** reference-parity
+- **Effort:** S
+
+### GLU-22 · P3 · install does not rewrite dependent load paths or build rpaths
+- **Area:** meson
+- **Where:** `crates/meson/src/install.rs`
+- **Problem:** `install_name_tool -id` is now applied to installed dylibs, but Meson also runs `install_name_tool -change` from `get_link_deps_mapping()` for build targets the library links, and rewrites ELF rpaths (removing build rpaths, adding `install_rpath`) in `depfixer.fix_rpath()`. A library that links another target of the same project keeps the build-tree install name after install.
+- **Recommendation:** Pass the linked targets' install-name mappings to `install_name_tool`, and apply the ELF rpath edit on Linux.
+- **Fix with:** reference-parity
+- **Effort:** M
+
+### GLU-23 · P3 · pkgconfig ignores library targets in requires and link_with on internal deps
+- **Area:** meson
+- **Where:** `crates/meson/src/modules/pkgconfig.rs`, `crates/meson/src/builtins/functions.rs`
+- **Problem:** Meson maps a library target passed to `requires`/`requires_private` to the `filebase` of the `.pc` generated for it (and errors otherwise). gluon only handles strings and dependency objects, silently dropping library objects. `declare_dependency()` also does not record `link_with`/`link_whole`, so an internal dependency contributes only its `dependencies:` to `Libs`/`Libs.private` and its `Requires`.
+- **Recommendation:** Track generated `.pc` metadata per target id, and store `link_with`/`link_whole`/`objects` on internal dependencies so `DependenciesHelper` can recurse as Meson does.
+- **Fix with:** reference-parity
+- **Effort:** M
+
+### GLU-24 · P3 · uninstalled pkgconfig file is approximate
+- **Area:** meson
+- **Where:** `crates/meson/src/modules/pkgconfig.rs`
+- **Problem:** the `meson-uninstalled/*-uninstalled.pc` Cflags are derived from each target's `include_directories` plus subdir. Meson builds them from `IncludeDirs.incdirs` plus `extra_build_dirs` for every processed library and nested link target, so paths that come from implicit or dependency include directories can be missing.
+- **Recommendation:** Record the uninstalled include directories while processing the dependency graph, as `DependenciesHelper._add_uninstalled_incdirs` does.
+- **Fix with:** reference-parity
+- **Effort:** S
+
+### GLU-25 · P3 · cmake dependency probe writes CMakeFiles into the caller's directory
+- **Area:** meson
+- **Where:** `crates/meson/src/dependencies.rs` (`find_cmake`)
+- **Problem:** when a `dependency()` falls through to the cmake method, the probe runs `cmake --find-package` with the setup process's working directory, leaving `CMakeFiles/CMakeSystem.cmake` there. Meson runs dependency detection with the build directory as cwd.
+- **Recommendation:** Run dependency probes with the build directory as the working directory, or use a scratch directory.
+- **Fix with:** reference-parity
+- **Effort:** S
+
+### GLU-26 · P3 · find_library with dirs skips the link check and system directories
+- **Area:** meson
+- **Where:** `crates/meson/src/compilers.rs` (`find_library`)
+- **Problem:** with `dirs:` Meson tries each naming pattern in the given directories and then in the compiler's system library directories, and link-checks each candidate (except static-only requests). gluon only checks whether the file exists in `dirs` and returns the first match, so a library present only in a system directory is reported missing, and a file that does not link is accepted.
+- **Recommendation:** Mirror `_find_library_real`: search `extra_dirs` followed by `get_library_dirs()` and probe candidates by linking a shared library.
+- **Fix with:** reference-parity
+- **Effort:** M

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::process::Command;
 
 const PLAN_FILE: &str = "meson-private/install_plan.json";
 const JSON_PRETTY: SerializerConfig =
@@ -80,6 +81,12 @@ pub fn generate(
             kind: "target".to_string(),
             follow_symlinks: None,
         });
+        for (alias, alias_target) in target.install_aliases() {
+            plan.symlinks.push(InstallSymlink {
+                target: alias_target,
+                destination: options::join_install_path(&dir, &alias),
+            });
+        }
     }
 
     for target in &build_data.custom_targets {
@@ -589,6 +596,10 @@ pub fn execute(plan: &InstallPlan, build_dir: &str, destdir: &str) -> Result<(),
             umask,
             file.follow_symlinks,
         )?;
+        if file.kind == "target" && cfg!(target_os = "macos") {
+            let final_path = installed_path(&plan.prefix, &file.destination);
+            fix_install_name(&file.source, &destination, &final_path)?;
+        }
     }
     for directory in &plan.directories {
         let destination = destdir_path(&destdir, &plan.prefix, &directory.destination);
@@ -601,6 +612,28 @@ pub fn execute(plan: &InstallPlan, build_dir: &str, destdir: &str) -> Result<(),
     }
 
     Ok(())
+}
+
+fn fix_install_name(source: &str, destination: &str, final_path: &str) -> Result<(), String> {
+    if !source.ends_with(".dylib") {
+        return Ok(());
+    }
+    match Command::new("install_name_tool")
+        .args(["-id", final_path, destination])
+        .output()
+    {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => Err(format!(
+            "install_name_tool failed for {}: {}",
+            destination,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "Cannot run install_name_tool for {}: {}",
+            destination, error
+        )),
+    }
 }
 
 fn destdir_path(destdir: &str, prefix: &str, destination: &str) -> String {

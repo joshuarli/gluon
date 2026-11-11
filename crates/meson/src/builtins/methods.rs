@@ -2200,6 +2200,7 @@ fn subproject_dependency(vm: &mut VM, obj: &Object, args: &[CallArg]) -> Result<
                 include_dirs: Vec::new(),
                 dependencies: Vec::new(),
                 variables: std::collections::HashMap::new(),
+                version_reqs: Vec::new(),
                 is_internal: false,
                 kind: "external_project".to_string(),
             }));

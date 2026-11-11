@@ -239,6 +239,7 @@ pub struct DependencyData {
     pub include_dirs: Vec<String>,
     pub dependencies: Vec<Object>,
     pub variables: HashMap<String, String>,
+    pub version_reqs: Vec<String>,
     pub is_internal: bool,
     /// Origin kind: "" (pkgconfig), "library" (compiler.find_library),
     /// "internal", "system", etc. Used by type_name().
@@ -257,6 +258,7 @@ impl DependencyData {
             include_dirs: Vec::new(),
             dependencies: Vec::new(),
             variables: HashMap::new(),
+            version_reqs: Vec::new(),
             is_internal: false,
             kind: String::new(),
         }

@@ -85,6 +85,7 @@ pub fn find_dependency(vm: &mut VM, name: &str, args: &[CallArg]) -> Option<Obje
             include_dirs: Vec::new(),
             dependencies: Vec::new(),
             variables: HashMap::new(),
+            version_reqs: Vec::new(),
             is_internal: false,
             kind: String::new(),
         }));
@@ -205,8 +206,9 @@ fn find_pkgconfig(
         include_dirs,
         dependencies: Vec::new(),
         variables,
+        version_reqs: version_req.map(|req| vec![req.to_string()]).unwrap_or_default(),
         is_internal: false,
-        kind: String::new(),
+        kind: "pkgconfig".to_string(),
     }))
 }
 
@@ -281,6 +283,7 @@ fn find_cmake(name: &str, version_req: Option<&str>, components: &[String]) -> O
         include_dirs: Vec::new(),
         dependencies: Vec::new(),
         variables: HashMap::new(),
+        version_reqs: Vec::new(),
         is_internal: false,
         kind: String::new(),
     }))
@@ -336,6 +339,7 @@ fn find_config_tool(name: &str, version_req: Option<&str>) -> Option<Object> {
         include_dirs: Vec::new(),
         dependencies: Vec::new(),
         variables: HashMap::new(),
+        version_reqs: Vec::new(),
         is_internal: false,
         kind: String::new(),
     }))
@@ -360,6 +364,7 @@ fn find_system_library(name: &str) -> Option<Object> {
             include_dirs: Vec::new(),
             dependencies: Vec::new(),
             variables: HashMap::new(),
+            version_reqs: Vec::new(),
             is_internal: false,
             kind: String::new(),
         })),
