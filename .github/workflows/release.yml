@@ -19,7 +19,7 @@ env:
 jobs:
   preflight:
     name: Validate release ref
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04-arm
     permissions:
       contents: read
     outputs:
@@ -50,7 +50,7 @@ jobs:
           - target: aarch64-apple-darwin
             runner: macos-latest
           - target: x86_64-unknown-linux-musl
-            runner: ubuntu-latest
+            runner: ubuntu-26.04-arm
     runs-on: ${{ matrix.runner }}
     permissions:
       actions: write
@@ -117,7 +117,7 @@ jobs:
   release:
     name: Create pre-release
     needs: [preflight, build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 5
     permissions:
       actions: read
