@@ -25,7 +25,7 @@ reverses.
   against `~/d/play`: libplacebo 7.387.0 + Metal patch, SPIRV-Cross
   vulkan-sdk 1.4.363.0, and the player crates link against them with
   `CARGO_TARGET_DIR` under `.work/tmp`. Play is CMake-less (no `cmake` in
-  `scripts/build-deps.sh`); Vulkan-Headers/Loader and shaderc come via
+  its dependency build script); Vulkan-Headers/Loader and shaderc come via
   bottles; SPIRV-Cross and libplacebo build via Meson. No CMake front end.
 - **OD-5 Pushing.** Verified commits on `main` are pushed to `origin`
   (`git@github.com:laputa-systems/gluon`) as they land. Never force-push. Red

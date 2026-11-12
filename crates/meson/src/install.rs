@@ -984,10 +984,7 @@ fn origin_relative(from: &str, to: &str) -> String {
     {
         common += 1;
     }
-    let mut relative: Vec<&str> = Vec::new();
-    for _ in common..from_parts.len() {
-        relative.push("..");
-    }
+    let mut relative: Vec<&str> = vec![".."; from_parts.len() - common];
     relative.extend_from_slice(&to_parts[common..]);
     if relative.is_empty() {
         "$ORIGIN/".to_string()
