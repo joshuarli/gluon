@@ -173,10 +173,8 @@ pub fn buildtype_dependents(buildtype: &str) -> Option<(&'static str, bool)> {
 }
 
 pub fn effective_optimization(options: &HashMap<String, Object>) -> String {
-    if let Some(value) = options.get("optimization") {
-        if let Object::String(s) = value {
-            return s.clone();
-        }
+    if let Some(Object::String(s)) = options.get("optimization") {
+        return s.clone();
     }
     if let Some(Object::String(buildtype)) = options.get("buildtype") {
         if let Some((optimization, _)) = buildtype_dependents(buildtype) {

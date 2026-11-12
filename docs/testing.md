@@ -26,8 +26,9 @@ Gates, narrowest first:
   build-only `build_rpath`.
 - `tests/upstream/musl.sh` — static-musl bins via Docker (pinned
   `rust:nightly-2026-09-15`, `--platform linux/amd64`, `x86_64-unknown-linux-musl`) that
-  run `--version` in the container. CI builds the same target directly with
-  `musl-tools` (see [decisions.md](decisions.md)).
+  run `--version` in the container. Release CI builds both Linux targets in the
+  shared musl toolchain image and checks the binaries with its static ELF
+  verifier (see [decisions.md](decisions.md)).
 - `tests/benchmarks/run.sh` — cold Meson setup, reconfigure, Ninja `-n` at
   1K/10K/100K edges, and a one-file incremental rebuild. The script prints
   each run. Rustybench harnesses in `crates/*/benches` time parse and plan
@@ -37,6 +38,6 @@ Gates, narrowest first:
 
 Qualification (`~/d/play`, read-only): drive libplacebo 7.387.0 with the
 Metal patch and SPIRV-Cross vulkan-sdk 1.4.363.0 through gluon `meson` +
-`ninja` per play's `scripts/build-deps.sh` Meson invocations, then link
+`ninja` per the Meson invocations in play's dependency build script, then link
 play's player crates against the outputs with `CARGO_TARGET_DIR` under this
 repo's `.work/tmp`.

@@ -227,7 +227,7 @@ fn fs_read(vm: &mut VM, _obj: &Object, args: &[CallArg]) -> Result<Object, Strin
         if data.len() >= 2 && data[0] == 0xFF && data[1] == 0xFE {
             // UTF-16 LE with BOM
             let u16_data: Vec<u16> = data[2..]
-                .chunks_exact(2)
+                .as_chunks::<2>().0.iter()
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect();
             String::from_utf16(&u16_data)
@@ -235,7 +235,7 @@ fn fs_read(vm: &mut VM, _obj: &Object, args: &[CallArg]) -> Result<Object, Strin
         } else if data.len() >= 2 && data[0] == 0xFE && data[1] == 0xFF {
             // UTF-16 BE with BOM
             let u16_data: Vec<u16> = data[2..]
-                .chunks_exact(2)
+                .as_chunks::<2>().0.iter()
                 .map(|c| u16::from_be_bytes([c[0], c[1]]))
                 .collect();
             String::from_utf16(&u16_data)
@@ -243,7 +243,7 @@ fn fs_read(vm: &mut VM, _obj: &Object, args: &[CallArg]) -> Result<Object, Strin
         } else {
             // No BOM, assume LE
             let u16_data: Vec<u16> = data
-                .chunks_exact(2)
+                .as_chunks::<2>().0.iter()
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect();
             String::from_utf16(&u16_data)

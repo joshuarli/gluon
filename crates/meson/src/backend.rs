@@ -377,7 +377,7 @@ impl NinjaBackend {
             } else {
                 format!("{}/{}/{}", self.source_root, target.subdir, source)
             };
-            let obj_src = self.object_source_name(genout.as_deref().unwrap_or(source));
+            let obj_src = self.object_source_name(genout.unwrap_or(source));
             let Some(obj_path) = self.target_object_path(target, source) else {
                 continue;
             };
@@ -1202,7 +1202,7 @@ impl NinjaBackend {
                 continue;
             }
             let key = dep.link_args.join("\u{1f}");
-            if seen.iter().any(|existing| *existing == key) {
+            if seen.contains(&key) {
                 continue;
             }
             seen.push(key);

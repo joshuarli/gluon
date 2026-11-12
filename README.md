@@ -14,8 +14,8 @@ test contract — see [docs/testing.md](docs/testing.md).
 ## Get it
 
 Published as GitHub prereleases: tags `release-<commit-sha>`, with
-`gluon-aarch64-apple-darwin.zip` and `gluon-x86_64-unknown-linux-musl.zip`
-plus `SHA256SUMS`. Verify with:
+`gluon-aarch64-apple-darwin.zip`, `gluon-aarch64-unknown-linux-musl.zip`, and
+`gluon-x86_64-unknown-linux-musl.zip` plus `SHA256SUMS`. Verify with:
 
 ```sh
 tag=$(gh release list --repo laputa-systems/gluon --limit 1 --json tagName -q '.[0].tagName')
@@ -24,8 +24,8 @@ gh release download "$tag" --repo laputa-systems/gluon --pattern 'SHA256SUMS'
 grep -F 'gluon-aarch64-apple-darwin.zip' SHA256SUMS | shasum -a 256 -c -
 ```
 
-Consumer installers: from `~/usr`, run `sh sync tools gluon`; from
-`~/d/view`, run `make toolchain`. Building from source is `cargo build --profile dist --locked`.
+Consumer installers: the `~/usr` repository installs gluon through its tools
+sync, and `~/d/view` through its toolchain target. Building from source is `cargo build --profile dist --locked`.
 
 ## Run
 

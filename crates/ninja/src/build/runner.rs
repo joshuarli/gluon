@@ -734,8 +734,7 @@ fn schedule(
                         let depfile = edge_binding(state, edge_ref, rule, "depfile");
                         if matches!(deps_kind.as_deref(), Some("gcc") | Some("msvc"))
                             && let Some(df_path) = depfile
-                        {
-                            if !df_path.is_empty()
+                            && !df_path.is_empty()
                                 && let Ok(text) = std::fs::read_to_string(&df_path)
                             {
                                 let parsed = depfile::parse(&text);
@@ -748,7 +747,6 @@ fn schedule(
                                 }
                                 let _ = std::fs::remove_file(&df_path);
                             }
-                        }
                     }
                 }
                 OutcomeKind::Failed { code, combined } => {
@@ -952,11 +950,10 @@ fn prepare(state: &State, edge: &Edge, opts: &Options) -> Result<Prepared, Strin
     for out in edge.outputs.iter().chain(&edge.implicit_outputs) {
         ensure_parent_dir(out);
     }
-    if let Some(path) = edge_binding(state, edge, rule, "depfile") {
-        if !path.is_empty() {
+    if let Some(path) = edge_binding(state, edge, rule, "depfile")
+        && !path.is_empty() {
             ensure_parent_dir(&path);
         }
-    }
 
     let rspfile = edge_binding(state, edge, rule, "rspfile")
         .filter(|s| !s.is_empty())

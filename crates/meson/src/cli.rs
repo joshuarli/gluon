@@ -1442,97 +1442,6 @@ impl Cli {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn test_cli(build_dir: &str, no_rebuild: bool) -> Cli {
-        let mut args = vec![
-            "meson".to_string(),
-            "test".to_string(),
-            "-C".to_string(),
-            build_dir.to_string(),
-        ];
-        if no_rebuild {
-            args.push("--no-rebuild".to_string());
-        }
-        Cli::parse_args_from(args)
-    }
-
-    fn temp_build(label: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "meson-test-status-{label}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    #[test]
-    fn missing_test_list_fails() {
-        let dir = temp_build("missing");
-        let code = test_cli(dir.to_str().unwrap(), true).run();
-        assert_ne!(code, 0);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn unreadable_test_list_fails() {
-        let dir = temp_build("badjson");
-        std::fs::create_dir_all(dir.join("meson-info")).unwrap();
-        std::fs::write(dir.join("meson-info/intro-tests.json"), "{").unwrap();
-        let code = test_cli(dir.to_str().unwrap(), true).run();
-        assert_ne!(code, 0);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn empty_test_list_succeeds() {
-        let dir = temp_build("empty");
-        std::fs::create_dir_all(dir.join("meson-info")).unwrap();
-        std::fs::write(dir.join("meson-info/intro-tests.json"), "[]").unwrap();
-        let code = test_cli(dir.to_str().unwrap(), true).run();
-        assert_eq!(code, 0);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn prereq_build_failure_fails_the_test_command() {
-        let dir = temp_build("prereq");
-        let code = test_cli(dir.to_str().unwrap(), false).run();
-        assert_ne!(code, 0);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn ninja_spawn_failure_fails() {
-        if std::env::var_os("GLUON_EMPTY_PATH_CHILD").is_none() {
-            let status = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "cli::tests::ninja_spawn_failure_fails",
-                    "--test-threads=1",
-                ])
-                .env("GLUON_EMPTY_PATH_CHILD", "1")
-                .env("PATH", "")
-                .status()
-                .unwrap();
-            assert!(status.success(), "the empty-PATH child run failed");
-            return;
-        }
-        let dir = temp_build("spawn");
-        std::fs::create_dir_all(dir.join("meson-info")).unwrap();
-        std::fs::write(dir.join("meson-info/intro-tests.json"), "[{\"name\":\"t\"}]").unwrap();
-        let code = test_cli(dir.to_str().unwrap(), true).run();
-        assert_ne!(code, 0);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-}
-
 fn parse_builtin_cli_option(
     args: &[String],
     i: &mut usize,
@@ -1708,4 +1617,95 @@ fn toolchain(vm: &crate::vm::VM) -> crate::backend::Toolchain {
         toolchain.archiver = archiver;
     }
     toolchain
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_cli(build_dir: &str, no_rebuild: bool) -> Cli {
+        let mut args = vec![
+            "meson".to_string(),
+            "test".to_string(),
+            "-C".to_string(),
+            build_dir.to_string(),
+        ];
+        if no_rebuild {
+            args.push("--no-rebuild".to_string());
+        }
+        Cli::parse_args_from(args)
+    }
+
+    fn temp_build(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "meson-test-status-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn missing_test_list_fails() {
+        let dir = temp_build("missing");
+        let code = test_cli(dir.to_str().unwrap(), true).run();
+        assert_ne!(code, 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unreadable_test_list_fails() {
+        let dir = temp_build("badjson");
+        std::fs::create_dir_all(dir.join("meson-info")).unwrap();
+        std::fs::write(dir.join("meson-info/intro-tests.json"), "{").unwrap();
+        let code = test_cli(dir.to_str().unwrap(), true).run();
+        assert_ne!(code, 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn empty_test_list_succeeds() {
+        let dir = temp_build("empty");
+        std::fs::create_dir_all(dir.join("meson-info")).unwrap();
+        std::fs::write(dir.join("meson-info/intro-tests.json"), "[]").unwrap();
+        let code = test_cli(dir.to_str().unwrap(), true).run();
+        assert_eq!(code, 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn prereq_build_failure_fails_the_test_command() {
+        let dir = temp_build("prereq");
+        let code = test_cli(dir.to_str().unwrap(), false).run();
+        assert_ne!(code, 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ninja_spawn_failure_fails() {
+        if std::env::var_os("GLUON_EMPTY_PATH_CHILD").is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "cli::tests::ninja_spawn_failure_fails",
+                    "--test-threads=1",
+                ])
+                .env("GLUON_EMPTY_PATH_CHILD", "1")
+                .env("PATH", "")
+                .status()
+                .unwrap();
+            assert!(status.success(), "the empty-PATH child run failed");
+            return;
+        }
+        let dir = temp_build("spawn");
+        std::fs::create_dir_all(dir.join("meson-info")).unwrap();
+        std::fs::write(dir.join("meson-info/intro-tests.json"), "[{\"name\":\"t\"}]").unwrap();
+        let code = test_cli(dir.to_str().unwrap(), true).run();
+        assert_ne!(code, 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
