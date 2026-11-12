@@ -141,7 +141,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(path("captured.txt")).unwrap(), "fed\n");
 
         std::fs::write(path("lib.a"), "stale").unwrap();
-        assert_eq!(run(&words(&["static-link", &path("lib.a"), "--", "/bin/true"])), 0);
+        assert_eq!(run(&words(&["static-link", &path("lib.a"), "--", "true"])), 0);
         assert!(!Path::new(&path("lib.a")).exists());
 
         std::fs::remove_dir_all(&dir).unwrap();
