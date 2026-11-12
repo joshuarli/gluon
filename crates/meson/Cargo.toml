@@ -12,7 +12,7 @@ deser-json = { version = "0.10.2", default-features = false }
 deser-value = { version = "0.10.2", default-features = false }
 
 [dev-dependencies]
-rustybench = { version = "0.1" }
+rustybench = { version = "0.5" }
 
 [[bench]]
 name = "meson"
